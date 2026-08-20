@@ -1,0 +1,10 @@
+{
+  "name": "Dealing-With-Issues",
+  "mode": "vendored",
+  "agents": [
+    "gemini",
+    "copilot",
+    "copilot-vscode"
+  ],
+  "dependencies": {}
+}
