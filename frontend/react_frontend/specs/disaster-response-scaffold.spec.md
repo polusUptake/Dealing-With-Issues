@@ -6,6 +6,7 @@ targets:
   - ../src/**/*.tsx
   - ../src/**/*.css
   - ../src/**/*.json
+  - ../../../backend/src/**/*.ts
 ---
 
 # Disaster Response App Scaffold

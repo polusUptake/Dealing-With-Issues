@@ -1,21 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
-import {
-  collection,
-  doc,
-  getDocs,
-  setDoc,
-  type Firestore,
-} from 'firebase/firestore'
-import {
-  getDownloadURL,
-  ref,
-  uploadBytes,
-  type FirebaseStorage,
-} from 'firebase/storage'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import './App.css'
-import { db, isFirebaseConfigured, storage } from './firebase'
 
 type ReportStatus = 'pending' | 'synced'
 
@@ -32,20 +18,12 @@ type ReportRecord = {
   syncStatus: ReportStatus
 }
 
-type RemoteReportRecord = {
-  id: string
-  title?: string
-  imageUrls?: string[]
-  location?: {
-    lat?: number
-    lng?: number
-  }
-  createdAt?: number
-}
+type BackendReportRecord = Omit<ReportRecord, 'images' | 'syncStatus'>
 
 const LOCAL_STORAGE_KEY = 'disaster-reports-v1'
 const DESKTOP_BREAKPOINT = 920
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN ?? ''
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8787'
 
 if (MAPBOX_TOKEN) {
   mapboxgl.accessToken = MAPBOX_TOKEN
@@ -101,11 +79,6 @@ function toDataUrls(fileList: FileList): Promise<string[]> {
   )
 }
 
-async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
-  const response = await fetch(dataUrl)
-  return response.blob()
-}
-
 function mergeReports(
   localReports: ReportRecord[],
   remoteReports: ReportRecord[],
@@ -154,6 +127,9 @@ function App() {
   const [isOnline, setIsOnline] = useState(() => navigator.onLine)
   const [isSyncing, setIsSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
+  const [backendStatus, setBackendStatus] = useState<'unknown' | 'ready' | 'offline'>(
+    'unknown',
+  )
   const [title, setTitle] = useState('')
   const [imageDataUrls, setImageDataUrls] = useState<string[]>([])
   const [formError, setFormError] = useState<string | null>(null)
@@ -166,6 +142,7 @@ function App() {
   >('report')
 
   const isMobile = useIsMobile()
+  const shouldRenderMap = !isMobile || activeMobilePanel === 'map'
 
   useEffect(() => {
     reportsRef.current = reports
@@ -185,7 +162,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!mapContainerRef.current || !MAPBOX_TOKEN) {
+    if (!mapContainerRef.current || !MAPBOX_TOKEN || !shouldRenderMap) {
       return
     }
 
@@ -206,7 +183,7 @@ function App() {
       map.remove()
       mapRef.current = null
     }
-  }, [isMobile])
+  }, [shouldRenderMap])
 
   useEffect(() => {
     if (!mapRef.current) {
@@ -236,32 +213,43 @@ function App() {
     }
   }, [reports])
 
-  async function fetchRemoteReports(firestore: Firestore) {
-    const snapshot = await getDocs(collection(firestore, 'reports'))
-    const remoteReports = snapshot.docs.map((document) => {
-      const data = document.data() as RemoteReportRecord
-      return {
-        id: document.id,
-        title: data.title ?? 'Untitled incident',
-        images: [],
-        imageUrls: Array.isArray(data.imageUrls) ? data.imageUrls : [],
-        location: {
-          lat: data.location?.lat ?? 0,
-          lng: data.location?.lng ?? 0,
-        },
-        createdAt: data.createdAt ?? Date.now(),
-        syncStatus: 'synced' as const,
-      }
-    })
+  async function fetchRemoteReports() {
+    if (!navigator.onLine) {
+      return
+    }
 
-    setReports((current) => mergeReports(current, remoteReports))
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/reports`)
+      if (!response.ok) {
+        setBackendStatus('offline')
+        return
+      }
+
+      setBackendStatus('ready')
+
+      const payload = (await response.json()) as { reports?: BackendReportRecord[] }
+      const remoteReports = Array.isArray(payload.reports) ? payload.reports : []
+
+      const mappedReports = remoteReports.map((report) => ({
+        id: report.id,
+        title: report.title,
+        images: [],
+        imageUrls: report.imageUrls,
+        location: report.location,
+        createdAt: report.createdAt,
+        syncStatus: 'synced' as const,
+      }))
+
+      setReports((current) => mergeReports(current, mappedReports))
+    } catch {
+      setBackendStatus('offline')
+      setSyncError('Could not fetch latest reports from backend.')
+    }
   }
 
-  async function syncPendingReports(
-    firestore: Firestore,
-    cloudStorage: FirebaseStorage,
-  ) {
-    const pendingReports = reportsRef.current.filter(
+  async function syncPendingReports(candidateReports?: ReportRecord[]) {
+    const sourceReports = candidateReports ?? reportsRef.current
+    const pendingReports = sourceReports.filter(
       (report) => report.syncStatus === 'pending',
     )
 
@@ -271,32 +259,37 @@ function App() {
 
     setIsSyncing(true)
     setSyncError(null)
-    const uploadedById = new Map<string, string[]>()
+    const syncedPayloadById = new Map<string, BackendReportRecord>()
     const syncedIds = new Set<string>()
 
     for (const report of pendingReports) {
       try {
-        const uploadedImageUrls: string[] = []
-        for (let index = 0; index < report.images.length; index += 1) {
-          const dataUrl = report.images[index]
-          const blob = await dataUrlToBlob(dataUrl)
-          const imageRef = ref(
-            cloudStorage,
-            `reports/${report.id}/image-${index}-${Date.now()}.jpg`,
-          )
-          await uploadBytes(imageRef, blob, { contentType: blob.type })
-          uploadedImageUrls.push(await getDownloadURL(imageRef))
-        }
-
-        await setDoc(doc(firestore, 'reports', report.id), {
-          title: report.title,
-          location: report.location,
-          createdAt: report.createdAt,
-          imageUrls: uploadedImageUrls,
-          updatedAt: Date.now(),
+        const response = await fetch(`${API_BASE_URL}/api/reports`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            id: report.id,
+            title: report.title,
+            images: report.images,
+            location: report.location,
+            createdAt: report.createdAt,
+          }),
         })
 
-        uploadedById.set(report.id, uploadedImageUrls)
+        if (!response.ok) {
+          setBackendStatus('offline')
+          throw new Error('Failed to sync report')
+        }
+
+        setBackendStatus('ready')
+
+        const payload = (await response.json()) as { report?: BackendReportRecord }
+        if (payload.report) {
+          syncedPayloadById.set(report.id, payload.report)
+        }
+
         syncedIds.add(report.id)
       } catch {
         setSyncError('Some offline reports are still pending sync. Retrying...')
@@ -313,7 +306,8 @@ function App() {
           return {
             ...report,
             syncStatus: 'synced',
-            imageUrls: uploadedById.get(report.id) ?? report.imageUrls,
+            imageUrls:
+              syncedPayloadById.get(report.id)?.imageUrls ?? report.imageUrls,
           }
         }),
       )
@@ -323,12 +317,28 @@ function App() {
   }
 
   useEffect(() => {
-    if (!isOnline || !db || !storage) {
+    if (!isOnline) {
       return
     }
 
-    void syncPendingReports(db, storage)
-    void fetchRemoteReports(db)
+    const kickoffHandle = window.setTimeout(() => {
+      void syncPendingReports()
+      void fetchRemoteReports()
+    }, 0)
+
+    return () => window.clearTimeout(kickoffHandle)
+  }, [isOnline])
+
+  useEffect(() => {
+    if (!isOnline) {
+      return
+    }
+
+    const retryHandle = window.setInterval(() => {
+      void syncPendingReports()
+    }, 15000)
+
+    return () => window.clearInterval(retryHandle)
   }, [isOnline])
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -356,13 +366,15 @@ function App() {
       syncStatus: 'pending',
     }
 
-    setReports((current) => [nextReport, ...current])
+    const nextReports = [nextReport, ...reportsRef.current]
+    reportsRef.current = nextReports
+    setReports(nextReports)
     setTitle('')
     setImageDataUrls([])
     setLocation(null)
 
-    if (isOnline && db && storage) {
-      void syncPendingReports(db, storage)
+    if (isOnline) {
+      void syncPendingReports(nextReports)
     }
   }
 
@@ -518,10 +530,9 @@ function App() {
         </div>
       </header>
 
-      {!isFirebaseConfigured ? (
+      {backendStatus === 'offline' ? (
         <p className="banner warning">
-          Firebase environment variables are missing. Reports will queue locally and stay
-          pending until Firebase is configured.
+          Backend is unreachable. Reports will stay queued locally until connection is restored.
         </p>
       ) : null}
 
