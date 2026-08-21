@@ -216,6 +216,7 @@ function App() {
 
   const [isRemote, setIsRemote] = useState<boolean>(false)
   const [draftPin, setDraftPin] = useState<{ lat: number; lng: number } | null>(null)
+  const [is3DMode, setIs3DMode] = useState<boolean>(false)
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null)
   const [activeMobilePanel, setActiveMobilePanel] = useState<
     'report' | 'map' | 'analytics'
@@ -264,6 +265,67 @@ function App() {
 
     map.addControl(new mapboxgl.NavigationControl(), 'bottom-right')
 
+    const init3DLayers = () => {
+      if (!map.getSource('mapbox-dem')) {
+        map.addSource('mapbox-dem', {
+          type: 'raster-dem',
+          url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+          tileSize: 512,
+          maxzoom: 14,
+        })
+      }
+
+      if (!map.getLayer('3d-buildings')) {
+        const layers = map.getStyle()?.layers
+        const labelLayerId = layers?.find(
+          (layer) => layer.type === 'symbol' && layer.layout?.['text-field'],
+        )?.id
+
+        map.addLayer(
+          {
+            id: '3d-buildings',
+            source: 'composite',
+            'source-layer': 'building',
+            filter: ['==', 'extrude', 'true'],
+            type: 'fill-extrusion',
+            minzoom: 14,
+            paint: {
+              'fill-extrusion-color': '#aaa',
+              'fill-extrusion-height': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                15,
+                0,
+                15.05,
+                ['get', 'height'],
+              ],
+              'fill-extrusion-base': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                15,
+                0,
+                15.05,
+                ['get', 'min_height'],
+              ],
+              'fill-extrusion-opacity': 0.6,
+            },
+            layout: {
+              visibility: 'none',
+            },
+          },
+          labelLayerId,
+        )
+      }
+    }
+
+    if (map.isStyleLoaded()) {
+      init3DLayers()
+    } else {
+      map.on('style.load', init3DLayers)
+    }
+
     map.on('click', (event) => {
       if (!isPickingOnMapRef.current && locationModeRef.current !== 'pin') {
         return
@@ -288,6 +350,56 @@ function App() {
       mapRef.current = null
     }
   }, [shouldRenderMap])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) {
+      return
+    }
+
+    // Context preservation
+    const currentCenter = map.getCenter()
+    const currentZoom = map.getZoom()
+    const currentBearing = map.getBearing()
+
+    if (is3DMode) {
+      // 3D Mode Activation
+      map.easeTo({
+        pitch: 60,
+        center: currentCenter,
+        zoom: currentZoom,
+        bearing: currentBearing,
+        duration: 1000,
+      })
+      try {
+        if (map.getSource('mapbox-dem')) {
+          map.setTerrain({ source: 'mapbox-dem', exaggeration: 1.5 })
+        }
+      } catch (err) {
+        console.warn('Failed to enable 3D terrain:', err)
+      }
+      if (map.getLayer('3d-buildings')) {
+        map.setLayoutProperty('3d-buildings', 'visibility', 'visible')
+      }
+    } else {
+      // 2D Mode Activation
+      map.easeTo({
+        pitch: 0,
+        center: currentCenter,
+        zoom: currentZoom,
+        bearing: currentBearing,
+        duration: 1000,
+      })
+      try {
+        map.setTerrain(null)
+      } catch (err) {
+        console.warn('Failed to disable 3D terrain:', err)
+      }
+      if (map.getLayer('3d-buildings')) {
+        map.setLayoutProperty('3d-buildings', 'visibility', 'none')
+      }
+    }
+  }, [is3DMode])
 
   useEffect(() => {
     if (!mapRef.current) {
@@ -1129,6 +1241,21 @@ function App() {
           {activeMobilePanel === 'map' ? (
             <section className="mobile-map">
               <div ref={mapContainerRef} className="map-canvas" />
+
+              {/* 2D / 3D Mode Toggle UI */}
+              <div className="map-view-toggle-container">
+                <button
+                  type="button"
+                  className={`map-view-toggle-btn ${is3DMode ? 'active-3d' : 'active-2d'}`}
+                  onClick={() => setIs3DMode((prev) => !prev)}
+                  title={is3DMode ? 'Switch to 2D view' : 'Switch to 3D terrain & buildings view'}
+                  aria-label="Toggle 2D / 3D map mode"
+                >
+                  <span className={`toggle-pill-option ${!is3DMode ? 'selected' : ''}`}>2D</span>
+                  <span className={`toggle-pill-option ${is3DMode ? 'selected' : ''}`}>3D</span>
+                </button>
+              </div>
+
               {isPickingOnMap ? (
                 <div className="map-picking-overlay">
                   <span>Tap map to set incident location</span>
@@ -1152,6 +1279,21 @@ function App() {
       ) : (
         <section className="desktop-stage">
           <div ref={mapContainerRef} className="map-canvas" />
+
+          {/* 2D / 3D Mode Toggle UI */}
+          <div className="map-view-toggle-container">
+            <button
+              type="button"
+              className={`map-view-toggle-btn ${is3DMode ? 'active-3d' : 'active-2d'}`}
+              onClick={() => setIs3DMode((prev) => !prev)}
+              title={is3DMode ? 'Switch to 2D view' : 'Switch to 3D terrain & buildings view'}
+              aria-label="Toggle 2D / 3D map mode"
+            >
+              <span className={`toggle-pill-option ${!is3DMode ? 'selected' : ''}`}>2D</span>
+              <span className={`toggle-pill-option ${is3DMode ? 'selected' : ''}`}>3D</span>
+            </button>
+          </div>
+
           {isPickingOnMap ? (
             <div className="map-picking-overlay">
               <span>Click anywhere on the map to pinpoint disaster location</span>
