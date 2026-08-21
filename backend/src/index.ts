@@ -21,18 +21,63 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 // 1. Initialize Firebase Admin
 const { configured, firestore } = initFirebaseAdmin();
 
+// Helper to verify Cloudflare Turnstile token
+async function verifyTurnstileToken(token: string, remoteIp?: string): Promise<boolean> {
+  const secretKey = process.env.CLOUDFLARE_SECRET_KEY?.trim();
+  if (!secretKey) {
+    return true; // If secret key not set in dev, allow
+  }
+
+  try {
+    const formData = new URLSearchParams();
+    formData.append('secret', secretKey);
+    formData.append('response', token);
+    if (remoteIp) {
+      formData.append('remoteip', remoteIp);
+    }
+
+    const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      body: formData,
+    });
+
+    const data = (await res.json()) as { success: boolean; 'error-codes'?: string[] };
+    return Boolean(data.success);
+  } catch (error) {
+    console.error('Error verifying Cloudflare Turnstile token:', error);
+    return false;
+  }
+}
+
 // Health check endpoint
 app.get('/api/health', (_req: Request, res: Response) => {
   return res.status(200).json({
     status: 'ok',
     firebaseConfigured: configured,
     cloudinaryConfigured: Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY),
+    turnstileConfigured: Boolean(process.env.CLOUDFLARE_SECRET_KEY),
   });
 });
 
 // POST: Submit a new report with image
 app.post('/api/reports', upload.single('image'), async (req: Request, res: Response) => {
   try {
+    const turnstileToken =
+      req.body['cf-turnstile-response'] ||
+      req.body.turnstileToken ||
+      (req.headers['x-turnstile-token'] as string);
+
+    if (process.env.CLOUDFLARE_SECRET_KEY) {
+      if (!turnstileToken) {
+        return res.status(400).json({ error: 'Security verification (Turnstile CAPTCHA) is required.' });
+      }
+
+      const isValidHuman = await verifyTurnstileToken(turnstileToken, req.ip);
+      if (!isValidHuman) {
+        return res.status(403).json({ error: 'Security verification failed. Please complete the CAPTCHA.' });
+      }
+    }
+
     const { title, description, userId, latitude, longitude, address, location, images, image } = req.body;
 
     const reportDesc = description || title;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import './App.css'
+import VerificationPanel from './components/recaptcha_cloudflare'
 
 type ReportStatus = 'pending' | 'synced'
 
@@ -16,6 +17,7 @@ type ReportRecord = {
   }
   createdAt: number
   syncStatus: ReportStatus
+  turnstileToken?: string
 }
 
 type BackendReportRecord = Omit<ReportRecord, 'images' | 'syncStatus'>
@@ -121,6 +123,8 @@ function App() {
   const mapRef = useRef<mapboxgl.Map | null>(null)
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
   const markersRef = useRef<mapboxgl.Marker[]>([])
+  const selectedMarkerRef = useRef<mapboxgl.Marker | null>(null)
+  const resetTimerRef = useRef<number | null>(null)
 
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(false)
@@ -134,6 +138,12 @@ function App() {
   const [imageDataUrls, setImageDataUrls] = useState<string[]>([])
   const [formError, setFormError] = useState<string | null>(null)
   const [isLocating, setIsLocating] = useState(false)
+  const [isPickingOnMap, setIsPickingOnMap] = useState(false)
+  const isPickingOnMapRef = useRef(isPickingOnMap)
+  isPickingOnMapRef.current = isPickingOnMap
+
+  const [submittedStatus, setSubmittedStatus] = useState(false)
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(
     null,
   )
@@ -143,6 +153,14 @@ function App() {
 
   const isMobile = useIsMobile()
   const shouldRenderMap = !isMobile || activeMobilePanel === 'map'
+
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current) {
+        window.clearTimeout(resetTimerRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     reportsRef.current = reports
@@ -175,15 +193,65 @@ function App() {
     })
 
     map.addControl(new mapboxgl.NavigationControl(), 'bottom-right')
+
+    map.on('click', (event) => {
+      if (!isPickingOnMapRef.current) {
+        return
+      }
+      const { lng, lat } = event.lngLat
+      setLocation({ lat, lng })
+      setIsPickingOnMap(false)
+      setFormError(null)
+    })
+
     mapRef.current = map
 
     return () => {
+      if (selectedMarkerRef.current) {
+        selectedMarkerRef.current.remove()
+        selectedMarkerRef.current = null
+      }
       markersRef.current.forEach((marker) => marker.remove())
       markersRef.current = []
       map.remove()
       mapRef.current = null
     }
   }, [shouldRenderMap])
+
+  useEffect(() => {
+    if (!mapRef.current) {
+      return
+    }
+    mapRef.current.getCanvas().style.cursor = isPickingOnMap ? 'crosshair' : ''
+  }, [isPickingOnMap])
+
+  useEffect(() => {
+    if (!mapRef.current) {
+      return
+    }
+
+    if (selectedMarkerRef.current) {
+      selectedMarkerRef.current.remove()
+      selectedMarkerRef.current = null
+    }
+
+    if (location) {
+      const el = document.createElement('div')
+      el.className = 'report-marker selected'
+      el.title = `Selected: Lat ${location.lat.toFixed(4)}, Lng ${location.lng.toFixed(4)}`
+
+      const marker = new mapboxgl.Marker({ element: el })
+        .setLngLat([location.lng, location.lat])
+        .setPopup(
+          new mapboxgl.Popup({ closeButton: false, offset: 12 }).setHTML(
+            `<h4>Selected Disaster Location</h4><p>Lat: ${location.lat.toFixed(4)}, Lng: ${location.lng.toFixed(4)}</p>`,
+          ),
+        )
+        .addTo(mapRef.current)
+
+      selectedMarkerRef.current = marker
+    }
+  }, [location])
 
   useEffect(() => {
     if (!mapRef.current) {
@@ -275,6 +343,8 @@ function App() {
             images: report.images,
             location: report.location,
             createdAt: report.createdAt,
+            turnstileToken: report.turnstileToken,
+            'cf-turnstile-response': report.turnstileToken,
           }),
         })
 
@@ -352,7 +422,12 @@ function App() {
     }
 
     if (!location) {
-      setFormError('Capture your location before submitting a report.')
+      setFormError('Capture or pick a location before submitting a report.')
+      return
+    }
+
+    if (import.meta.env.VITE_CLOUDFLARE_SITE_KEY && !turnstileToken) {
+      setFormError('Please complete the security verification before submitting.')
       return
     }
 
@@ -364,6 +439,7 @@ function App() {
       location,
       createdAt: Date.now(),
       syncStatus: 'pending',
+      turnstileToken: turnstileToken || undefined,
     }
 
     const nextReports = [nextReport, ...reportsRef.current]
@@ -372,6 +448,21 @@ function App() {
     setTitle('')
     setImageDataUrls([])
     setLocation(null)
+    setIsPickingOnMap(false)
+    setTurnstileToken(null)
+
+    if (selectedMarkerRef.current) {
+      selectedMarkerRef.current.remove()
+      selectedMarkerRef.current = null
+    }
+
+    setSubmittedStatus(true)
+    if (resetTimerRef.current) {
+      window.clearTimeout(resetTimerRef.current)
+    }
+    resetTimerRef.current = window.setTimeout(() => {
+      setSubmittedStatus(false)
+    }, 5000)
 
     if (isOnline) {
       void syncPendingReports(nextReports)
@@ -380,6 +471,7 @@ function App() {
 
   function handleLocateUser() {
     setFormError(null)
+    setIsPickingOnMap(false)
     if (!navigator.geolocation) {
       setFormError('Geolocation is not supported on this device.')
       return
@@ -389,15 +481,16 @@ function App() {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         setIsLocating(false)
-        setLocation({
+        const coords = {
           lat: position.coords.latitude,
           lng: position.coords.longitude,
-        })
+        }
+        setLocation(coords)
 
         if (mapRef.current) {
           mapRef.current.flyTo({
-            center: [position.coords.longitude, position.coords.latitude],
-            zoom: 12,
+            center: [coords.lng, coords.lat],
+            zoom: 13,
             essential: true,
           })
         }
@@ -423,7 +516,7 @@ function App() {
 
   const reportForm = (
     <form className="report-form" onSubmit={handleSubmit}>
-      <h2>Report Incident</h2>
+      <h2>Enter Report</h2>
       <label htmlFor="report-title">Title</label>
       <input
         id="report-title"
@@ -452,26 +545,110 @@ function App() {
       />
       <p className="helper-text">{imageDataUrls.length} image(s) attached</p>
 
-      <button
-        type="button"
-        className="secondary"
-        onClick={handleLocateUser}
-        disabled={isLocating}
-      >
-        {isLocating ? 'Capturing location...' : 'Use my location'}
-      </button>
+      {/* Location capture decision block */}
+      {imageDataUrls.length > 0 ? (
+        <div className="location-prompt-box">
+          <p className="location-prompt-title">Is the disaster at your current location?</p>
+          <div className="location-prompt-buttons">
+            <button
+              type="button"
+              className={`location-opt-btn ${location && !isPickingOnMap ? 'selected' : ''}`}
+              onClick={handleLocateUser}
+              disabled={isLocating}
+            >
+              {isLocating ? 'Capturing location...' : 'Yes, at my location'}
+            </button>
+            <button
+              type="button"
+              className={`location-opt-btn ${isPickingOnMap ? 'active' : ''}`}
+              onClick={() => {
+                setIsPickingOnMap(true)
+                setFormError(null)
+                if (isMobile) {
+                  setActiveMobilePanel('map')
+                }
+              }}
+            >
+              {isPickingOnMap ? 'Clicking map...' : 'No, pick on map'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="location-prompt-box">
+          <p className="location-prompt-title">Location</p>
+          <div className="location-prompt-buttons">
+            <button
+              type="button"
+              className="location-opt-btn"
+              onClick={handleLocateUser}
+              disabled={isLocating}
+            >
+              {isLocating ? 'Capturing location...' : 'Use my location'}
+            </button>
+            <button
+              type="button"
+              className={`location-opt-btn ${isPickingOnMap ? 'active' : ''}`}
+              onClick={() => {
+                setIsPickingOnMap(true)
+                setFormError(null)
+                if (isMobile) {
+                  setActiveMobilePanel('map')
+                }
+              }}
+            >
+              {isPickingOnMap ? 'Clicking map...' : 'Pick on map'}
+            </button>
+          </div>
+        </div>
+      )}
 
-      <p className="helper-text">
-        {location
-          ? `Lat ${location.lat.toFixed(4)}, Lng ${location.lng.toFixed(4)}`
-          : 'Location not captured'}
-      </p>
+      {location ? (
+        <div className="location-captured-badge">
+          <span>📍 Lat {location.lat.toFixed(4)}, Lng {location.lng.toFixed(4)}</span>
+          <button
+            type="button"
+            className="clear-location-btn"
+            onClick={() => {
+              setLocation(null)
+              setIsPickingOnMap(false)
+              if (selectedMarkerRef.current) {
+                selectedMarkerRef.current.remove()
+                selectedMarkerRef.current = null
+              }
+            }}
+            title="Clear location"
+          >
+            ✕
+          </button>
+        </div>
+      ) : isPickingOnMap ? (
+        <p className="helper-text picking-highlight">📍 Click anywhere on the map to place disaster pin</p>
+      ) : (
+        <p className="helper-text">Location not selected</p>
+      )}
 
       {formError ? <p className="error">{formError}</p> : null}
+
+      <VerificationPanel
+        onVerify={(token) => {
+          setTurnstileToken(token)
+          setFormError(null)
+        }}
+        onExpireOrError={() => setTurnstileToken(null)}
+      />
 
       <button type="submit" className="primary">
         Submit report
       </button>
+
+      {/* Submission status textpanel */}
+      <div
+        className={`submit-status-panel ${submittedStatus ? 'submitted' : 'idle'}`}
+        role="status"
+        aria-live="polite"
+      >
+        {submittedStatus ? 'Submitted' : 'Report being prepared'}
+      </div>
     </form>
   )
 
@@ -571,6 +748,14 @@ function App() {
           {activeMobilePanel === 'map' ? (
             <section className="mobile-map">
               <div ref={mapContainerRef} className="map-canvas" />
+              {isPickingOnMap ? (
+                <div className="map-picking-overlay">
+                  <span>📍 Tap map to set incident location</span>
+                  <button type="button" onClick={() => setIsPickingOnMap(false)}>
+                    Cancel
+                  </button>
+                </div>
+              ) : null}
               {!MAPBOX_TOKEN ? (
                 <div className="map-overlay-message">
                   Add VITE_MAPBOX_ACCESS_TOKEN to render the map.
@@ -586,6 +771,14 @@ function App() {
       ) : (
         <section className="desktop-stage">
           <div ref={mapContainerRef} className="map-canvas" />
+          {isPickingOnMap ? (
+            <div className="map-picking-overlay">
+              <span>📍 Click anywhere on the map to pinpoint disaster location</span>
+              <button type="button" onClick={() => setIsPickingOnMap(false)}>
+                Cancel
+              </button>
+            </div>
+          ) : null}
           {!MAPBOX_TOKEN ? (
             <div className="map-overlay-message">
               Add VITE_MAPBOX_ACCESS_TOKEN to render the map.

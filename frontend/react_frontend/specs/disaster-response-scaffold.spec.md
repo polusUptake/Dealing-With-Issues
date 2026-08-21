@@ -50,16 +50,34 @@ The map implementation must support custom overlay styling and pin rendering. Ma
 The reporting interface includes:
 - Title input (required).
 - Image attachment support (0..n images).
-- User location capture (lat/lng required before successful submit).
+- Location selection prompt triggered after images are added:
+  - Prompt asking whether the disaster is at the user's current location.
+  - "Yes (Current Location)": Captures device GPS coordinates (`navigator.geolocation`).
+  - "No (Pick on Map)": Enables interactive map picking. Clicking on the active map captures the clicked latitude/longitude, places a temporary selection pin, and saves coordinates to the report.
+- Bot / security verification (Cloudflare Turnstile CAPTCHA).
 - Submit action that produces a new report record.
 
 `[@test] ../src/__tests__/reporting/report-form-required-fields.test.tsx`
 
-### Validation and submit outcomes
+### Location selection on map
+- When "Pick on map" mode is selected, clicking on the map canvas captures `e.lngLat` (lat and lng).
+- A selection pin indicates the chosen location on the map.
+- Mobile users switching to the map panel retain their selected coordinates when returning to the report panel.
 
+`[@test] ../src/__tests__/reporting/report-map-click-location.test.tsx`
+
+### Security verification (Turnstile)
+- Form presents a Cloudflare Turnstile challenge using `VITE_CLOUDFLARE_SITE_KEY`.
+- Submitting without passing the CAPTCHA is blocked with a user-visible validation message.
+- The backend verifies the received Turnstile token against Cloudflare's `/siteverify` endpoint using `CLOUDFLARE_SECRET_KEY`.
+
+`[@test] ../src/__tests__/security/turnstile-captcha-verification.test.tsx`
+
+### Validation and submit outcomes
 - Submitting without title is blocked with a user-visible validation message.
 - Submitting without location is blocked with a user-visible validation message.
-- Successful submit shows immediate local confirmation and updates map pins.
+- Successful submit displays a green status text panel at the bottom showing "Submitted" for 5 seconds.
+- After 5 seconds, the status text panel returns to "Report Incident", the form resets (clearing title, images, location selection mode), and the user can submit a new report.
 
 `[@test] ../src/__tests__/reporting/report-submit-validation-and-success.test.tsx`
 

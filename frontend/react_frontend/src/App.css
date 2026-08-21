@@ -330,6 +330,209 @@
   background: #f59f00;
 }
 
+.report-marker.selected {
+  background: #1976d2;
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
+  width: 22px;
+  height: 22px;
+  animation: pulse-marker 1.8s infinite;
+}
+
+@keyframes pulse-marker {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(25, 118, 210, 0.7);
+  }
+  70% {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 8px rgba(25, 118, 210, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(25, 118, 210, 0);
+  }
+}
+
+.location-prompt-box {
+  background: #ffffff;
+  border: 1px solid #d4c8b8;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.location-prompt-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: #2c251d;
+}
+
+.location-prompt-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.location-opt-btn {
+  flex: 1;
+  border: 1px solid #33404f;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  background: #f4f4f4;
+  color: #2f2f2f;
+  transition: all 180ms ease;
+}
+
+.location-opt-btn:hover:not(:disabled) {
+  background: #e8e8e8;
+  border-color: #244f76;
+}
+
+.location-opt-btn.active {
+  background: #244f76;
+  color: #ffffff;
+  border-color: #1a3955;
+  box-shadow: 0 0 0 2px rgba(36, 79, 118, 0.25);
+}
+
+.location-opt-btn.selected {
+  background: #2e7d32;
+  color: #ffffff;
+  border-color: #1b5e20;
+}
+
+.location-captured-badge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #eef7ee;
+  border: 1px solid #a3d9a5;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  color: #1e5e23;
+  font-weight: 600;
+}
+
+.clear-location-btn {
+  border: none;
+  background: transparent;
+  color: #888;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.clear-location-btn:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: #333;
+}
+
+.picking-highlight {
+  color: #1976d2 !important;
+  font-weight: 600;
+  animation: pulse-text 1.5s infinite;
+}
+
+@keyframes pulse-text {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.map-picking-overlay {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(25, 118, 210, 0.95);
+  color: #ffffff;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  z-index: 10;
+  backdrop-filter: blur(4px);
+}
+
+.map-picking-overlay button {
+  background: #ffffff;
+  color: #1976d2;
+  border: none;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.submit-status-panel {
+  padding: 10px 14px;
+  border-radius: 8px;
+  text-align: center;
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  transition: background-color 300ms ease, color 300ms ease, border-color 300ms ease, transform 180ms ease;
+}
+
+.submit-status-panel.idle {
+  background: #ede6d8;
+  border: 1px solid #c9beaa;
+  color: #4a3e2e;
+}
+
+.submit-status-panel.submitted {
+  background: #2e7d32;
+  border: 1px solid #1b5e20;
+  color: #ffffff;
+  box-shadow: 0 3px 10px rgba(46, 125, 50, 0.35);
+  transform: scale(1.02);
+}
+
+.turnstile-wrapper {
+  background: #ffffff;
+  border: 1px solid #d4c8b8;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 200ms ease, background-color 200ms ease;
+}
+
+.turnstile-wrapper.verified {
+  border-color: #2e7d32;
+  background: #f1f8f1;
+}
+
+.turnstile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.turnstile-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: #2c251d;
+}
+
+.turnstile-wrapper.verified .turnstile-title {
+  color: #2e7d32;
+}
+
 @media (max-width: 919px) {
   .app-shell {
     padding: 10px;
