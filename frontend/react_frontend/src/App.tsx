@@ -1,8 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import { ThumbsUp, ThumbsDown, Camera, Clock, MapPin } from 'lucide-react'
 import './App.css'
 import VerificationPanel from './components/recaptcha_cloudflare'
+import AnalyticsPanel from './components/AnalyticsPanel'
+
+function calculateDistanceKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const R = 6371 // Radius of the Earth in km
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLon = ((lon2 - lon1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2)
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return R * c
+}
 
 type ReportStatus = 'pending' | 'synced'
 
@@ -18,9 +39,16 @@ type ReportRecord = {
   createdAt: number
   syncStatus: ReportStatus
   turnstileToken?: string
+  upvotes?: number
+  downvotes?: number
 }
 
-type BackendReportRecord = Omit<ReportRecord, 'images' | 'syncStatus'>
+type BackendReportRecord = Omit<ReportRecord, 'images' | 'syncStatus'> & {
+  ticketId?: string
+  description?: string
+  media?: { url: string; public_id: string }
+  timestamp?: string
+}
 
 const LOCAL_STORAGE_KEY = 'disaster-reports-v1'
 const DESKTOP_BREAKPOINT = 920
@@ -56,7 +84,21 @@ function loadLocalReports(): ReportRecord[] {
         typeof candidate.location?.lat === 'number' &&
         typeof candidate.location?.lng === 'number'
       )
-    }) as ReportRecord[]
+    }).map((report) => {
+      const candidate = report as Partial<ReportRecord>
+      return {
+        id: candidate.id!,
+        title: candidate.title!,
+        images: Array.isArray(candidate.images) ? candidate.images : [],
+        imageUrls: Array.isArray(candidate.imageUrls) ? candidate.imageUrls : [],
+        location: candidate.location!,
+        createdAt: candidate.createdAt!,
+        syncStatus: candidate.syncStatus === 'pending' ? 'pending' : 'synced',
+        turnstileToken: candidate.turnstileToken,
+        upvotes: typeof candidate.upvotes === 'number' ? candidate.upvotes : 0,
+        downvotes: typeof candidate.downvotes === 'number' ? candidate.downvotes : 0,
+      } as ReportRecord
+    })
   } catch {
     return []
   }
@@ -81,6 +123,16 @@ function toDataUrls(fileList: FileList): Promise<string[]> {
   )
 }
 
+
+
+function getTransformedThumb(url?: string): string {
+  if (!url) return ''
+  if (url.includes('/upload/')) {
+    return url.replace('/upload/', '/upload/c_thumb,w_100,h_100,g_auto/')
+  }
+  return url
+}
+
 function mergeReports(
   localReports: ReportRecord[],
   remoteReports: ReportRecord[],
@@ -92,8 +144,17 @@ function mergeReports(
 
   for (const report of remoteReports) {
     const existing = merged.get(report.id)
-    if (!existing || existing.syncStatus === 'pending') {
+    if (!existing) {
       merged.set(report.id, report)
+    } else {
+      merged.set(report.id, {
+        ...existing,
+        title: report.title,
+        imageUrls: report.imageUrls.length > 0 ? report.imageUrls : existing.imageUrls,
+        location: report.location,
+        upvotes: typeof report.upvotes === 'number' ? report.upvotes : (existing.upvotes || 0),
+        downvotes: typeof report.downvotes === 'number' ? report.downvotes : (existing.downvotes || 0),
+      })
     }
   }
 
@@ -147,6 +208,7 @@ function App() {
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(
     null,
   )
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null)
   const [activeMobilePanel, setActiveMobilePanel] = useState<
     'report' | 'map' | 'analytics'
   >('report')
@@ -295,17 +357,26 @@ function App() {
 
       setBackendStatus('ready')
 
-      const payload = (await response.json()) as { reports?: BackendReportRecord[] }
-      const remoteReports = Array.isArray(payload.reports) ? payload.reports : []
+      const payload = (await response.json()) as {
+        tickets?: BackendReportRecord[]
+        reports?: BackendReportRecord[]
+      }
+      const rawReports = payload.tickets || payload.reports || []
+      const remoteReports = Array.isArray(rawReports) ? rawReports : []
 
       const mappedReports = remoteReports.map((report) => ({
-        id: report.id,
-        title: report.title,
+        id: report.ticketId || report.id,
+        title: report.title || report.description || 'Incident',
         images: [],
-        imageUrls: report.imageUrls,
-        location: report.location,
-        createdAt: report.createdAt,
+        imageUrls: report.media?.url ? [report.media.url] : (Array.isArray(report.imageUrls) ? report.imageUrls : []),
+        location: {
+          lat: report.location?.lat ?? (report.location as any)?.latitude ?? 0,
+          lng: report.location?.lng ?? (report.location as any)?.longitude ?? 0,
+        },
+        createdAt: typeof report.createdAt === 'number' ? report.createdAt : (report.timestamp ? new Date(report.timestamp).getTime() : Date.now()),
         syncStatus: 'synced' as const,
+        upvotes: typeof report.upvotes === 'number' ? report.upvotes : 0,
+        downvotes: typeof report.downvotes === 'number' ? report.downvotes : 0,
       }))
 
       setReports((current) => mergeReports(current, mappedReports))
@@ -503,6 +574,160 @@ function App() {
     )
   }
 
+  const nearbyRankedReports = useMemo(() => {
+    // 1. If location is null: return empty array
+    if (!location) {
+      return []
+    }
+
+    // 2. Filter within 15 km radius and sort descending by upvotes
+    return reports
+      .map((report) => {
+        const hasCoords =
+          typeof report.location?.lat === 'number' && typeof report.location?.lng === 'number'
+        const distKm = hasCoords
+          ? calculateDistanceKm(
+              location.lat,
+              location.lng,
+              report.location.lat,
+              report.location.lng,
+            )
+          : Infinity
+
+        return { ...report, distanceKm: distKm }
+      })
+      .filter((item) => item.distanceKm <= 15.0)
+      .sort((a, b) => {
+        const upA = a.upvotes || 0
+        const upB = b.upvotes || 0
+        if (upB !== upA) {
+          return upB - upA
+        }
+        return b.createdAt - a.createdAt
+      })
+  }, [location, reports])
+
+  const selectedReport = useMemo(() => {
+    if (!selectedReportId) return null
+    return reports.find((r) => r.id === selectedReportId) || null
+  }, [reports, selectedReportId])
+
+  const similarReports = useMemo(() => {
+    if (!location) {
+      return []
+    }
+
+    const trimmed = title.trim().toLowerCase()
+    const words = trimmed
+      ? trimmed
+          .split(/\s+/)
+          .map((w) => w.replace(/[^a-z0-9]/gi, ''))
+          .filter((w) => w.length > 3)
+      : []
+
+    return reports
+      .map((report) => {
+        const hasCoords =
+          typeof report.location?.lat === 'number' && typeof report.location?.lng === 'number'
+        const distKm = hasCoords
+          ? calculateDistanceKm(
+              location.lat,
+              location.lng,
+              report.location.lat,
+              report.location.lng,
+            )
+          : Infinity
+
+        return { ...report, distanceKm: distKm }
+      })
+      .filter((item) => {
+        if (item.distanceKm > 15.0) return false
+        if (words.length > 0) {
+          const reportTitle = (item.title || '').toLowerCase()
+          return words.some((word) => reportTitle.includes(word))
+        }
+        return true
+      })
+      .sort((a, b) => {
+        const upA = a.upvotes || 0
+        const upB = b.upvotes || 0
+        if (upB !== upA) return upB - upA
+        return a.distanceKm - b.distanceKm
+      })
+      .slice(0, 5)
+  }, [title, location, reports])
+
+  async function handleVote(reportId: string, action: 'upvote' | 'downvote') {
+    // 1. Optimistic update in local state
+    setReports((current) =>
+      current.map((r) => {
+        if (r.id !== reportId) return r
+        const up = r.upvotes || 0
+        const down = r.downvotes || 0
+        return {
+          ...r,
+          upvotes: action === 'upvote' ? up + 1 : up,
+          downvotes: action === 'downvote' ? down + 1 : down,
+        }
+      })
+    )
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/reports/${reportId}/vote`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Vote failed')
+      }
+
+      const data = (await response.json()) as {
+        success?: boolean
+        deleted?: boolean
+        ticket?: { upvotes?: number; downvotes?: number }
+      }
+
+      if (data.deleted) {
+        // Auto-deletion threshold reached: remove from state & map
+        setReports((current) => current.filter((r) => r.id !== reportId))
+        if (selectedReportId === reportId) {
+          setSelectedReportId(null)
+        }
+      } else if (data.ticket) {
+        setReports((current) =>
+          current.map((r) =>
+            r.id === reportId
+              ? {
+                  ...r,
+                  upvotes: data.ticket?.upvotes ?? r.upvotes,
+                  downvotes: data.ticket?.downvotes ?? r.downvotes,
+                }
+              : r
+          )
+        )
+      }
+    } catch (err) {
+      console.error('Failed to submit vote:', err)
+      // Rollback optimistic vote
+      setReports((current) =>
+        current.map((r) => {
+          if (r.id !== reportId) return r
+          const up = r.upvotes || 0
+          const down = r.downvotes || 0
+          return {
+            ...r,
+            upvotes: action === 'upvote' ? Math.max(0, up - 1) : up,
+            downvotes: action === 'downvote' ? Math.max(0, down - 1) : down,
+          }
+        })
+      )
+    }
+  }
+
   const analytics = useMemo(() => {
     const total = reports.length
     const pending = reports.filter((report) => report.syncStatus === 'pending').length
@@ -517,15 +742,71 @@ function App() {
   const reportForm = (
     <form className="report-form" onSubmit={handleSubmit}>
       <h2>Enter Report</h2>
+
+      {/* 1. Location Capture Section at the very top */}
+      <div className="location-prompt-box location-first-box">
+        <p className="location-prompt-title">Location</p>
+        <div className="location-prompt-buttons">
+          <button
+            type="button"
+            className={`location-opt-btn ${location && !isPickingOnMap ? 'selected' : ''}`}
+            onClick={handleLocateUser}
+            disabled={isLocating}
+          >
+            {isLocating ? 'Capturing location...' : 'Use my location'}
+          </button>
+          <button
+            type="button"
+            className={`location-opt-btn ${isPickingOnMap ? 'active' : ''}`}
+            onClick={() => {
+              setIsPickingOnMap(true)
+              setFormError(null)
+              if (isMobile) {
+                setActiveMobilePanel('map')
+              }
+            }}
+          >
+            {isPickingOnMap ? 'Clicking map...' : 'Drop pin'}
+          </button>
+        </div>
+
+        {location ? (
+          <div className="location-captured-badge">
+            <span>📍 Lat {location.lat.toFixed(4)}, Lng {location.lng.toFixed(4)}</span>
+            <button
+              type="button"
+              className="clear-location-btn"
+              onClick={() => {
+                setLocation(null)
+                setIsPickingOnMap(false)
+                if (selectedMarkerRef.current) {
+                  selectedMarkerRef.current.remove()
+                  selectedMarkerRef.current = null
+                }
+              }}
+              title="Clear location"
+            >
+              ✕
+            </button>
+          </div>
+        ) : isPickingOnMap ? (
+          <p className="helper-text picking-highlight">📍 Click anywhere on the map to place disaster pin</p>
+        ) : (
+          <p className="helper-text">Location not selected</p>
+        )}
+      </div>
+
+      {/* 2. Title text input */}
       <label htmlFor="report-title">Title</label>
       <input
         id="report-title"
         type="text"
-        placeholder="Bridge collapse near River Road"
+        placeholder="Disaster in my college"
         value={title}
         onChange={(event) => setTitle(event.target.value)}
       />
 
+      {/* 3. Add pictures file input & image count helper text */}
       <label htmlFor="report-images">Add pictures</label>
       <input
         id="report-images"
@@ -545,88 +826,6 @@ function App() {
       />
       <p className="helper-text">{imageDataUrls.length} image(s) attached</p>
 
-      {/* Location capture decision block */}
-      {imageDataUrls.length > 0 ? (
-        <div className="location-prompt-box">
-          <p className="location-prompt-title">Is the disaster at your current location?</p>
-          <div className="location-prompt-buttons">
-            <button
-              type="button"
-              className={`location-opt-btn ${location && !isPickingOnMap ? 'selected' : ''}`}
-              onClick={handleLocateUser}
-              disabled={isLocating}
-            >
-              {isLocating ? 'Capturing location...' : 'Yes, at my location'}
-            </button>
-            <button
-              type="button"
-              className={`location-opt-btn ${isPickingOnMap ? 'active' : ''}`}
-              onClick={() => {
-                setIsPickingOnMap(true)
-                setFormError(null)
-                if (isMobile) {
-                  setActiveMobilePanel('map')
-                }
-              }}
-            >
-              {isPickingOnMap ? 'Clicking map...' : 'No, pick on map'}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="location-prompt-box">
-          <p className="location-prompt-title">Location</p>
-          <div className="location-prompt-buttons">
-            <button
-              type="button"
-              className="location-opt-btn"
-              onClick={handleLocateUser}
-              disabled={isLocating}
-            >
-              {isLocating ? 'Capturing location...' : 'Use my location'}
-            </button>
-            <button
-              type="button"
-              className={`location-opt-btn ${isPickingOnMap ? 'active' : ''}`}
-              onClick={() => {
-                setIsPickingOnMap(true)
-                setFormError(null)
-                if (isMobile) {
-                  setActiveMobilePanel('map')
-                }
-              }}
-            >
-              {isPickingOnMap ? 'Clicking map...' : 'Pick on map'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {location ? (
-        <div className="location-captured-badge">
-          <span>📍 Lat {location.lat.toFixed(4)}, Lng {location.lng.toFixed(4)}</span>
-          <button
-            type="button"
-            className="clear-location-btn"
-            onClick={() => {
-              setLocation(null)
-              setIsPickingOnMap(false)
-              if (selectedMarkerRef.current) {
-                selectedMarkerRef.current.remove()
-                selectedMarkerRef.current = null
-              }
-            }}
-            title="Clear location"
-          >
-            ✕
-          </button>
-        </div>
-      ) : isPickingOnMap ? (
-        <p className="helper-text picking-highlight">📍 Click anywhere on the map to place disaster pin</p>
-      ) : (
-        <p className="helper-text">Location not selected</p>
-      )}
-
       {formError ? <p className="error">{formError}</p> : null}
 
       <VerificationPanel
@@ -637,6 +836,7 @@ function App() {
         onExpireOrError={() => setTurnstileToken(null)}
       />
 
+      {/* 4. Submit report button */}
       <button type="submit" className="primary">
         Submit report
       </button>
@@ -647,49 +847,179 @@ function App() {
         role="status"
         aria-live="polite"
       >
-        {submittedStatus ? 'Submitted' : 'Report being prepared'}
+        {submittedStatus ? 'Submitted' : 'Report incident'}
       </div>
+
+      {/* Similar / Nearby Reports Recommendation & Moderation */}
+      {similarReports.length > 0 ? (
+        <div className="similar-reports-section">
+          <p className="similar-reports-heading">Nearby Existing Incidents</p>
+          <div className="similar-reports-list">
+            {similarReports.map((similar) => {
+              const thumbUrl = similar.imageUrls?.[0] || similar.images?.[0]
+              const transformedThumb = getTransformedThumb(thumbUrl)
+              const distanceLabel =
+                typeof (similar as any).distanceKm === 'number' &&
+                isFinite((similar as any).distanceKm)
+                  ? (similar as any).distanceKm < 1
+                    ? `${Math.round((similar as any).distanceKm * 1000)} m away`
+                    : `${(similar as any).distanceKm.toFixed(1)} km away`
+                  : ''
+
+              return (
+                <div key={similar.id} className="similar-report-row">
+                  {transformedThumb ? (
+                    <img
+                      src={transformedThumb}
+                      alt={similar.title}
+                      className="similar-report-thumb"
+                    />
+                  ) : (
+                    <div className="similar-report-thumb-placeholder">📷</div>
+                  )}
+
+                  <div className="similar-report-info">
+                    <span className="similar-report-title" title={similar.title}>
+                      {similar.title}
+                    </span>
+                    <div className="similar-report-meta">
+                      {distanceLabel ? (
+                        <span className="similar-report-distance">📍 {distanceLabel}</span>
+                      ) : null}
+                      <small className="similar-report-date">
+                        {new Date(similar.createdAt).toLocaleDateString()}
+                      </small>
+                    </div>
+                  </div>
+
+                  <div className="similar-report-voting">
+                    <button
+                      type="button"
+                      className="vote-btn upvote"
+                      onClick={() => handleVote(similar.id, 'upvote')}
+                      disabled={!location}
+                      title={location ? 'Upvote this report' : 'Capture your location to vote'}
+                      aria-label="Upvote"
+                    >
+                      <ThumbsUp size={13} /> {similar.upvotes || 0}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="vote-btn downvote"
+                      onClick={() => handleVote(similar.id, 'downvote')}
+                      disabled={!location}
+                      title={location ? 'Downvote this report' : 'Capture your location to vote'}
+                      aria-label="Downvote"
+                    >
+                      <ThumbsDown size={13} /> {similar.downvotes || 0}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ) : null}
     </form>
   )
 
-  const analyticsPanel = (
-    <section className="analytics-panel">
-      <h2>Incident Analytics</h2>
-      <div className="stats-grid">
-        <article>
-          <span>Total</span>
-          <strong>{analytics.total}</strong>
-        </article>
-        <article>
-          <span>Synced</span>
-          <strong>{analytics.synced}</strong>
-        </article>
-        <article>
-          <span>Pending</span>
-          <strong>{analytics.pending}</strong>
-        </article>
-      </div>
-
-      <h3>Latest incident</h3>
-      {analytics.latest ? (
-        <div className="latest-incident">
-          <strong>{analytics.latest.title}</strong>
-          <p>{new Date(analytics.latest.createdAt).toLocaleString()}</p>
-        </div>
+  const rightSidebarContent = (
+    <>
+      {!location ? (
+        <section className="analytics-intelligence-panel empty">
+          <div className="empty-state-container">
+            <MapPin size={36} className="empty-icon" />
+            <h3>Nearby Reports & Analytics</h3>
+            <p>Capture your location in the left sidebar to view nearby incident reports and analytics.</p>
+          </div>
+        </section>
+      ) : selectedReport ? (
+        <AnalyticsPanel
+          report={selectedReport}
+          allReports={nearbyRankedReports}
+          userLocation={location}
+          onBack={() => setSelectedReportId(null)}
+        />
       ) : (
-        <p className="helper-text">No incidents submitted yet.</p>
-      )}
+        <section className="nearby-feed-panel">
+          <div className="nearby-feed-header">
+            <h2>Nearby Incidents</h2>
+            <span className="feed-count-pill">{nearbyRankedReports.length} within 15 km</span>
+          </div>
 
-      <h3>Recent reports</h3>
-      <ul className="incident-list">
-        {reports.slice(0, 8).map((report) => (
-          <li key={report.id}>
-            <span>{report.title}</span>
-            <small>{report.syncStatus}</small>
-          </li>
-        ))}
-      </ul>
-    </section>
+          {nearbyRankedReports.length === 0 ? (
+            <div className="no-reports-box">
+              <p>No incidents reported within 15 km of your location.</p>
+            </div>
+          ) : (
+            <div className="nearby-ranked-feed">
+              {nearbyRankedReports.map((report) => {
+                const thumbUrl = report.imageUrls?.[0] || report.images?.[0]
+                const heroSrc = thumbUrl
+                  ? thumbUrl.includes('/upload/')
+                    ? thumbUrl.replace('/upload/', '/upload/c_fill,w_350,h_180,g_auto/')
+                    : thumbUrl
+                  : ''
+                const distanceLabel =
+                  typeof report.distanceKm === 'number' && isFinite(report.distanceKm)
+                    ? report.distanceKm < 1
+                      ? `${Math.round(report.distanceKm * 1000)} m away`
+                      : `${report.distanceKm.toFixed(1)} km away`
+                    : ''
+
+                return (
+                  <article
+                    key={report.id}
+                    className="nearby-report-card"
+                    onClick={() => setSelectedReportId(report.id)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        setSelectedReportId(report.id)
+                      }
+                    }}
+                  >
+                    <div className="feed-card-image-wrapper">
+                      {heroSrc ? (
+                        <img src={heroSrc} alt={report.title} className="feed-card-image" />
+                      ) : (
+                        <div className="feed-card-image-placeholder">
+                          <Camera size={28} />
+                          <span>No media attached</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="feed-card-content">
+                      <h3 className="feed-card-title">{report.title}</h3>
+                      <div className="feed-card-meta">
+                        {distanceLabel ? (
+                          <span className="feed-card-distance">📍 {distanceLabel}</span>
+                        ) : null}
+                        <span className="feed-card-timestamp">
+                          <Clock size={12} /> {new Date(report.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+
+                      <div className="feed-card-votes">
+                        <span className="vote-badge up">
+                          <ThumbsUp size={14} /> {report.upvotes || 0}
+                        </span>
+                        <span className="vote-badge down">
+                          <ThumbsDown size={14} /> {report.downvotes || 0}
+                        </span>
+                      </div>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      )}
+    </>
   )
 
   return (
@@ -765,7 +1095,7 @@ function App() {
           ) : null}
 
           {activeMobilePanel === 'analytics' ? (
-            <aside className="mobile-card">{analyticsPanel}</aside>
+            <aside className="mobile-card">{rightSidebarContent}</aside>
           ) : null}
         </section>
       ) : (
@@ -808,7 +1138,7 @@ function App() {
             >
               {rightCollapsed ? '<' : '>'}
             </button>
-            <div className="sidebar-content">{analyticsPanel}</div>
+            <div className="sidebar-content">{rightSidebarContent}</div>
           </aside>
         </section>
       )}

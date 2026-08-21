@@ -26,6 +26,8 @@ export interface TicketDocument {
   status: 'open' | 'in-progress' | 'resolved';
   timestamp: string;
   createdAt?: number;
+  upvotes: number;
+  downvotes: number;
   location?: {
     latitude: number;
     longitude: number;

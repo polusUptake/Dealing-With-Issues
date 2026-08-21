@@ -5,7 +5,7 @@ import multer from 'multer';
 import crypto from 'crypto';
 import { initFirebaseAdmin } from './firebaseAdmin.js';
 import { uploadImageBuffer, uploadDataUrl } from './cloudinary.js';
-import { listTickets, saveTicket } from './reportsStore.js';
+import { listTickets, saveTicket, voteTicket } from './reportsStore.js';
 import { TicketDocument } from './types.js';
 
 const app = express();
@@ -132,6 +132,8 @@ app.post('/api/reports', upload.single('image'), async (req: Request, res: Respo
       status: 'open',
       timestamp: new Date().toISOString(),
       createdAt: req.body.createdAt ? Number(req.body.createdAt) : Date.now(),
+      upvotes: 0,
+      downvotes: 0,
       location: lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng) ? {
         latitude: lat,
         longitude: lng,
@@ -156,6 +158,43 @@ app.post('/api/reports', upload.single('image'), async (req: Request, res: Respo
     });
   } catch (error: any) {
     console.error('Error submitting report:', error);
+    return res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+});
+
+// POST: Vote on an existing report
+app.post('/api/reports/:id/vote', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const { action } = req.body;
+
+    if (action !== 'upvote' && action !== 'downvote') {
+      return res.status(400).json({ error: "Action must be 'upvote' or 'downvote'" });
+    }
+
+    const result = await voteTicket(id, action, firestore);
+
+    if ('notFound' in result) {
+      return res.status(404).json({ error: 'Report not found' });
+    }
+
+    if (result.deleted) {
+      return res.status(200).json({
+        success: true,
+        deleted: true,
+        ticketId: id,
+        message: 'Report deleted due to community moderation threshold',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      deleted: false,
+      ticket: result.ticket,
+      report: result.ticket,
+    });
+  } catch (error: any) {
+    console.error('Error voting on report:', error);
     return res.status(500).json({ error: error.message || 'Internal Server Error' });
   }
 });
