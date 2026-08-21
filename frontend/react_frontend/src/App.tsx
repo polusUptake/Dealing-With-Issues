@@ -1,7 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
-import { ThumbsUp, ThumbsDown, Camera, Clock, MapPin } from 'lucide-react'
+import {
+  ThumbsUp,
+  ThumbsDown,
+  Camera,
+  Clock,
+  MapPin,
+  Users,
+  Building2,
+  AlertTriangle,
+  PhoneCall,
+  X,
+} from 'lucide-react'
 import './App.css'
 import VerificationPanel from './components/recaptcha_cloudflare'
 import AnalyticsPanel from './components/AnalyticsPanel'
@@ -42,6 +53,9 @@ type ReportRecord = {
   upvotes?: number
   downvotes?: number
   isRemote?: boolean
+  aiClassification?: string | null
+  compositeSeverity?: 'LOW' | 'MEDIUM' | 'HIGH'
+  aiVisionScore?: number | null
 }
 
 type BackendReportRecord = Omit<ReportRecord, 'images' | 'syncStatus'> & {
@@ -49,12 +63,61 @@ type BackendReportRecord = Omit<ReportRecord, 'images' | 'syncStatus'> & {
   description?: string
   media?: { url: string; public_id: string }
   timestamp?: string
+  aiClassification?: string | null
+  compositeSeverity?: 'LOW' | 'MEDIUM' | 'HIGH'
+  aiVisionScore?: number | null
 }
 
 const LOCAL_STORAGE_KEY = 'disaster-reports-v1'
 const DESKTOP_BREAKPOINT = 920
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN ?? ''
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8787'
+const HF_API_TOKEN = import.meta.env.VITE_HF_API_TOKEN ?? ''
+
+async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const res = await fetch(dataUrl)
+  return res.blob()
+}
+
+async function classifyImageWithHF(dataUrl?: string): Promise<string | null> {
+  if (!dataUrl || !HF_API_TOKEN) {
+    return null
+  }
+
+  try {
+    const blob = await dataUrlToBlob(dataUrl)
+    const response = await fetch(
+      'https://api-inference.huggingface.co/models/Luwayy/disaster_images_model',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${HF_API_TOKEN}`,
+        },
+        body: blob,
+      },
+    )
+
+    if (!response.ok) {
+      console.warn('Hugging Face API returned non-200 status:', response.status, response.statusText)
+      return null
+    }
+
+    const data = (await response.json()) as Array<{ label: string; score: number }> | { error?: string }
+    if (!Array.isArray(data) || data.length === 0) {
+      return null
+    }
+
+    // Extract the label with highest score
+    const bestMatch = data.reduce((prev, current) => {
+      return (current.score ?? 0) > (prev.score ?? 0) ? current : prev
+    }, data[0])
+
+    return bestMatch.label || null
+  } catch (error) {
+    console.warn('Failed to classify image via Hugging Face:', error)
+    return null
+  }
+}
 
 if (MAPBOX_TOKEN) {
   mapboxgl.accessToken = MAPBOX_TOKEN
@@ -99,6 +162,9 @@ function loadLocalReports(): ReportRecord[] {
         upvotes: typeof candidate.upvotes === 'number' ? candidate.upvotes : 0,
         downvotes: typeof candidate.downvotes === 'number' ? candidate.downvotes : 0,
         isRemote: typeof candidate.isRemote === 'boolean' ? candidate.isRemote : false,
+        aiClassification: candidate.aiClassification ?? null,
+        compositeSeverity: candidate.compositeSeverity || 'LOW',
+        aiVisionScore: typeof candidate.aiVisionScore === 'number' ? candidate.aiVisionScore : null,
       } as ReportRecord
     })
   } catch {
@@ -192,7 +258,7 @@ function App() {
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(false)
   const [isOnline, setIsOnline] = useState(() => navigator.onLine)
-  const [isSyncing, setIsSyncing] = useState(false)
+  const [, setIsSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const [backendStatus, setBackendStatus] = useState<'unknown' | 'ready' | 'offline'>(
     'unknown',
@@ -221,6 +287,13 @@ function App() {
   const [activeMobilePanel, setActiveMobilePanel] = useState<
     'report' | 'map' | 'analytics'
   >('report')
+
+  // Floating Action Navbar & SOS System State
+  const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false)
+  const [selectedOrgType, setSelectedOrgType] = useState('')
+  const [orgEmail, setOrgEmail] = useState('')
+  const [registrationStatus, setRegistrationStatus] = useState<string | null>(null)
+  const [isSosAlertOpen, setIsSosAlertOpen] = useState(false)
 
   const isMobile = useIsMobile()
   const shouldRenderMap = !isMobile || activeMobilePanel === 'map'
@@ -446,23 +519,36 @@ function App() {
 
     for (const report of reports) {
       const markerElement = document.createElement('button')
-      markerElement.className =
-        report.syncStatus === 'pending' ? 'report-marker pending' : 'report-marker'
+      const severityClass =
+        report.compositeSeverity === 'HIGH'
+          ? 'severity-high'
+          : report.compositeSeverity === 'MEDIUM'
+            ? 'severity-medium'
+            : 'severity-low'
+
+      const isPending = report.syncStatus === 'pending'
+      const isSelected = selectedReportId === report.id
+      markerElement.className = `report-marker ${severityClass} ${isPending ? 'pending' : ''} ${isSelected ? 'selected' : ''}`.trim()
       markerElement.type = 'button'
-      markerElement.title = report.title
+      markerElement.title = `${report.title} (${report.compositeSeverity || 'LOW'} severity)`
+
+      markerElement.addEventListener('click', (e) => {
+        e.stopPropagation()
+        setSelectedReportId(report.id)
+      })
 
       const marker = new mapboxgl.Marker({ element: markerElement })
         .setLngLat([report.location.lng, report.location.lat])
         .setPopup(
           new mapboxgl.Popup({ closeButton: false, offset: 12 }).setHTML(
-            `<h4>${report.title}</h4><p>${new Date(report.createdAt).toLocaleString()}</p>`,
+            `<h4>${report.title}</h4><p>Severity: <strong>${report.compositeSeverity || 'LOW'}</strong></p><p>${new Date(report.createdAt).toLocaleString()}</p>`,
           ),
         )
         .addTo(mapRef.current)
 
       markersRef.current.push(marker)
     }
-  }, [reports])
+  }, [reports, selectedReportId])
 
   async function fetchRemoteReports() {
     if (!navigator.onLine) {
@@ -498,6 +584,10 @@ function App() {
         syncStatus: 'synced' as const,
         upvotes: typeof report.upvotes === 'number' ? report.upvotes : 0,
         downvotes: typeof report.downvotes === 'number' ? report.downvotes : 0,
+        isRemote: typeof report.isRemote === 'boolean' ? report.isRemote : false,
+        aiClassification: report.aiClassification || (report as any).aiMetadata?.classifiedCategory || null,
+        compositeSeverity: report.compositeSeverity || 'LOW',
+        aiVisionScore: typeof report.aiVisionScore === 'number' ? report.aiVisionScore : null,
       }))
 
       setReports((current) => mergeReports(current, mappedReports))
@@ -538,6 +628,9 @@ function App() {
             turnstileToken: report.turnstileToken,
             'cf-turnstile-response': report.turnstileToken,
             isRemote: report.isRemote || false,
+            aiClassification: report.aiClassification || null,
+            compositeSeverity: report.compositeSeverity || 'LOW',
+            aiVisionScore: report.aiVisionScore ?? null,
           }),
         })
 
@@ -571,6 +664,18 @@ function App() {
             syncStatus: 'synced',
             imageUrls:
               syncedPayloadById.get(report.id)?.imageUrls ?? report.imageUrls,
+            aiClassification:
+              syncedPayloadById.get(report.id)?.aiClassification ??
+              report.aiClassification ??
+              null,
+            compositeSeverity:
+              syncedPayloadById.get(report.id)?.compositeSeverity ??
+              report.compositeSeverity ??
+              'LOW',
+            aiVisionScore:
+              syncedPayloadById.get(report.id)?.aiVisionScore ??
+              report.aiVisionScore ??
+              null,
           }
         }),
       )
@@ -624,16 +729,23 @@ function App() {
       return
     }
 
+    const imagePayload = locationMode === 'pin' ? [] : imageDataUrls
+    let aiClassification: string | null = null
+    if (imagePayload.length > 0) {
+      aiClassification = await classifyImageWithHF(imagePayload[0])
+    }
+
     const nextReport: ReportRecord = {
       id: crypto.randomUUID(),
       title: trimmedTitle,
-      images: locationMode === 'pin' ? [] : imageDataUrls,
+      images: imagePayload,
       imageUrls: [],
       location,
       createdAt: Date.now(),
       syncStatus: 'pending',
       turnstileToken: turnstileToken || undefined,
       isRemote: locationMode === 'pin' ? isRemote : false,
+      aiClassification,
     }
 
     const nextReports = [nextReport, ...reportsRef.current]
@@ -854,16 +966,52 @@ function App() {
     }
   }
 
-  const analytics = useMemo(() => {
-    const total = reports.length
-    const pending = reports.filter((report) => report.syncStatus === 'pending').length
-    const synced = total - pending
-    const latest = reports[0]
+  const handleCoordinate = () => {
+    // Coordinate button performs no action (placeholder)
+  }
 
-    return { total, pending, synced, latest }
-  }, [reports])
+  const handleOpenRegisterModal = () => {
+    setSelectedOrgType('')
+    setOrgEmail('')
+    setRegistrationStatus(null)
+    setIsRegisterModalOpen(true)
+  }
 
-  const statusLabel = isOnline ? 'Online' : 'Offline'
+  const handleRegisterOrg = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedOrgType || !orgEmail) return
+    setRegistrationStatus('Registration pending...')
+    setTimeout(() => {
+      setIsRegisterModalOpen(false)
+      setRegistrationStatus(null)
+    }, 1200)
+  }
+
+  const handleSOS = () => {
+    // 1. Native Browser Notification
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'granted') {
+        try {
+          new Notification('SOS Alert', { body: 'Emergency alert triggered.' })
+        } catch (e) {
+          console.warn('Native notification error:', e)
+        }
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission().then((permission) => {
+          if (permission === 'granted') {
+            try {
+              new Notification('SOS Alert', { body: 'Emergency alert triggered.' })
+            } catch (e) {
+              console.warn('Native notification error:', e)
+            }
+          }
+        })
+      }
+    }
+
+    // 2. Local Alert Dialog (Calls attention to Call 112)
+    setIsSosAlertOpen(true)
+  }
 
   const reportForm = (
     <form className="report-form" onSubmit={handleSubmit}>
@@ -1121,7 +1269,7 @@ function App() {
                 const thumbUrl = report.imageUrls?.[0] || report.images?.[0]
                 const heroSrc = thumbUrl
                   ? thumbUrl.includes('/upload/')
-                    ? thumbUrl.replace('/upload/', '/upload/c_fill,w_350,h_180,g_auto/')
+                    ? thumbUrl.replace('/upload/', '/upload/c_fill,w_600,h_340,g_auto/')
                     : thumbUrl
                   : ''
                 const distanceLabel =
@@ -1157,6 +1305,14 @@ function App() {
 
                     <div className="feed-card-content">
                       <h3 className="feed-card-title">{report.title}</h3>
+
+                      {report.aiClassification ? (
+                        <div className="ai-classification-pill">
+                          <span className="ai-classification-icon">✨</span>
+                          <span>Classified as: <strong>{report.aiClassification}</strong></span>
+                        </div>
+                      ) : null}
+
                       <div className="feed-card-meta">
                         {distanceLabel ? (
                           <span className="feed-card-distance">{distanceLabel}</span>
@@ -1187,19 +1343,6 @@ function App() {
 
   return (
     <main className="app-shell">
-      <header className="app-header">
-        <div>
-          <h1>Disaster Response</h1>
-          <p>Offline-first reporting with synchronized incident visibility.</p>
-        </div>
-        <div className={`status-pill ${isOnline ? 'online' : 'offline'}`}>
-          <span>{statusLabel}</span>
-          <small>
-            {isSyncing ? 'Syncing reports...' : `${analytics.pending} pending report(s)`}
-          </small>
-        </div>
-      </header>
-
       {backendStatus === 'offline' ? (
         <p className="banner warning">
           Backend is unreachable. Reports will stay queued locally until connection is restored.
@@ -1334,6 +1477,157 @@ function App() {
             <div className="sidebar-content">{rightSidebarContent}</div>
           </aside>
         </section>
+      )}
+
+      {/* Floating Action Navbar */}
+      <nav className="floating-navbar" aria-label="Floating Action Navigation">
+        <button
+          type="button"
+          className="navbar-action-btn coordinate-btn"
+          onClick={handleCoordinate}
+        >
+          <Users size={16} />
+          <span>Coordinate</span>
+        </button>
+
+        <button
+          type="button"
+          className="navbar-action-btn register-org-btn"
+          onClick={handleOpenRegisterModal}
+        >
+          <Building2 size={16} />
+          <span>Register org</span>
+        </button>
+
+        <button
+          type="button"
+          className="navbar-action-btn sos-btn"
+          onClick={handleSOS}
+        >
+          <AlertTriangle size={16} />
+          <span>SOS</span>
+        </button>
+      </nav>
+
+      {/* Register Organization Modal */}
+      {isRegisterModalOpen && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setIsRegisterModalOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="modal-dialog"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="register-modal-title"
+          >
+            <div className="modal-header">
+              <h2 id="register-modal-title">Register Organization</h2>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => setIsRegisterModalOpen(false)}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleRegisterOrg} className="register-org-form">
+              <div className="form-group">
+                <label htmlFor="org-type-select" className="form-label">
+                  Organization Type
+                </label>
+                <select
+                  id="org-type-select"
+                  className="org-type-select"
+                  value={selectedOrgType}
+                  onChange={(e) => setSelectedOrgType(e.target.value)}
+                  required
+                >
+                  <option value="" disabled>
+                    -- Select Organization Type --
+                  </option>
+                  <option value="Volunteer">Volunteer</option>
+                  <option value="NGO">NGO</option>
+                  <option value="Government bodies">Government bodies</option>
+                  <option value="Emergency response service">Emergency response service</option>
+                </select>
+              </div>
+
+              {selectedOrgType ? (
+                <div className="dynamic-registration-fields">
+                  <div className="form-group">
+                    <label htmlFor="org-email-input" className="form-label">
+                      Email Address
+                    </label>
+                    <input
+                      id="org-email-input"
+                      type="email"
+                      className="org-email-input"
+                      placeholder="e.g. contact@organization.org"
+                      required
+                      value={orgEmail}
+                      onChange={(e) => setOrgEmail(e.target.value)}
+                    />
+                  </div>
+
+                  <button type="submit" className="primary register-submit-btn">
+                    Register
+                  </button>
+                </div>
+              ) : null}
+
+              {registrationStatus ? (
+                <p className="registration-status-message">{registrationStatus}</p>
+              ) : null}
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* SOS Alert Dialog */}
+      {isSosAlertOpen && (
+        <div
+          className="modal-backdrop sos-backdrop"
+          onClick={() => setIsSosAlertOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="modal-dialog sos-dialog"
+            onClick={(e) => e.stopPropagation()}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="sos-alert-title"
+          >
+            <div className="sos-dialog-header">
+              <div className="sos-icon-badge">
+                <AlertTriangle size={32} />
+              </div>
+              <h2 id="sos-alert-title">Emergency Alert</h2>
+            </div>
+
+            <div className="sos-dialog-body">
+              <p className="sos-call-text">Call 112</p>
+              <p className="sos-subtext">Immediate emergency response line</p>
+              <a href="tel:112" className="sos-phone-call-btn">
+                <PhoneCall size={18} /> Call 112
+              </a>
+            </div>
+
+            <div className="sos-dialog-footer">
+              <button
+                type="button"
+                className="secondary sos-close-btn"
+                onClick={() => setIsSosAlertOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   )

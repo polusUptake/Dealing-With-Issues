@@ -16,6 +16,9 @@ export interface ReportPayload {
   images?: string[];
   createdAt?: number;
   isRemote?: boolean;
+  aiClassification?: string | null;
+  compositeSeverity?: 'LOW' | 'MEDIUM' | 'HIGH';
+  aiVisionScore?: number | null;
 }
 
 export interface TicketDocument {
@@ -24,12 +27,15 @@ export interface TicketDocument {
   userId?: string;
   title?: string;
   description: string;
-  status: 'open' | 'in-progress' | 'resolved';
+  status: 'open' | 'in-progress' | 'resolved' | 'escalated' | 'developing';
   timestamp: string;
   createdAt?: number;
   upvotes: number;
   downvotes: number;
   isRemote?: boolean;
+  aiClassification?: string | null;
+  compositeSeverity?: 'LOW' | 'MEDIUM' | 'HIGH';
+  aiVisionScore?: number | null;
   location?: {
     latitude: number;
     longitude: number;

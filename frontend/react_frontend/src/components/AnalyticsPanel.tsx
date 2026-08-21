@@ -38,6 +38,7 @@ export interface AnalyticsReport {
   upvotes?: number
   downvotes?: number
   isRemote?: boolean
+  aiClassification?: string | null
 }
 
 interface AnalyticsPanelProps {
@@ -77,7 +78,7 @@ function formatDistance(distKm?: number): string {
 function getHeroImage(url?: string): string {
   if (!url) return ''
   if (url.includes('/upload/')) {
-    return url.replace('/upload/', '/upload/c_fill,w_400,h_220,g_auto/')
+    return url.replace('/upload/', '/upload/c_fill,w_600,h_340,g_auto/')
   }
   return url
 }
@@ -260,9 +261,16 @@ export default function AnalyticsPanel({
           </span>
         </div>
 
+        {report.aiClassification ? (
+          <div className="ai-classification-pill">
+            <span className="ai-classification-icon">✨</span>
+            <span>Classified as: <strong>{report.aiClassification}</strong></span>
+          </div>
+        ) : null}
+
         {/* Hero image preview */}
         {heroImageSrc ? (
-          <div className="hero-thumbnail-wrapper" style={{ height: '160px', borderRadius: '8px' }}>
+          <div className="hero-thumbnail-wrapper" style={{ height: '190px', borderRadius: '8px', flexShrink: 0 }}>
             <img src={heroImageSrc} alt={report.title} className="hero-thumbnail-image" />
           </div>
         ) : null}

@@ -138,6 +138,67 @@ On mobile breakpoints, information priority changes to optimize field reporting:
 
 `[@test] ../src/__tests__/responsive/mobile-navigation-and-state-retention.test.tsx`
 
+## Floating Action Navbar & SOS System
+
+This section defines a new floating navigation bar overlaid on the map. It includes placeholder actions for coordination, a multi-step modal for organization registration, and an SOS button that utilizes the native browser Notification API.
+
+### 1. Floating Navbar UI & Layout
+
+The navbar must be persistently visible over the map interface.
+- Positioned absolutely or fixed at the bottom center of the screen (e.g., `bottom: 24px`, `left: 50%`, `transform: translateX(-50%)`).
+- Must have a high enough `z-index` to sit above the Mapbox canvas and other overlay elements.
+- Contains three evenly spaced buttons: "Coordinate", "Register org", and "SOS".
+  `[@test] ../src/__tests__/navbar/navbar-positioning.test.tsx`
+
+### 2. "Coordinate" Button (Placeholder)
+
+- Renders a button labeled "Coordinate".
+- Currently performs no action when clicked (no-op).
+  `[@test] ../src/__tests__/navbar/coordinate-noop.test.tsx`
+
+### 3. "Register org" Flow
+
+Clicking "Register org" opens a centered overlay/modal blocking interaction with the map until closed.
+
+#### 3.1 The Registration Modal
+- Centered on the screen with a semi-transparent backdrop.
+- Includes a "Close" (X) button to dismiss the modal.
+- Displays a dropdown or a list of radio buttons with the following exact options:
+  - Volunteer
+  - NGO
+  - Government bodies
+  - Emergency response service
+  `[@test] ../src/__tests__/navbar/register-modal-rendering.test.tsx`
+
+#### 3.2 Registration Form State
+- Initially, only the organization type selection is visible.
+- Once an organization type is selected by the user, dynamically reveal:
+  - An email `<input type="email" />`.
+  - A "Register" `<button>`.
+- Clicking "Register" currently performs no backend action, but should ideally close the modal or show a "Registration pending" placeholder message.
+  `[@test] ../src/__tests__/navbar/register-dynamic-form.test.tsx`
+
+### 4. "SOS" Button Flow
+
+The SOS button executes two distinct actions simultaneously to assist the user in an emergency.
+
+#### 4.1 Native Browser Notification
+- When "SOS" is clicked, the app must check for `Notification` API support and current permission status.
+- If permissions are not granted, it must call `Notification.requestPermission()`.
+- Once granted, it must trigger a local system notification (e.g., `new Notification('SOS Alert', { body: 'Emergency alert triggered.' })`).
+  `[@test] ../src/__tests__/navbar/sos-native-notification.test.tsx`
+
+#### 4.2 Local Alert Dialog
+- Immediately alongside the notification attempt, the app must display a highly visible on-screen dialog or native `window.alert()`.
+- The dialog must explicitly state the text: `"Call 112"`.
+  `[@test] ../src/__tests__/navbar/sos-alert-dialog.test.tsx`
+
+### 5. CSS & Responsiveness
+
+- Ensure the floating navbar collapses elegantly on mobile screens (e.g., reducing padding or stacking horizontally if the screen is exceptionally narrow).
+- Ensure the Registration Modal and SOS Dialog are responsive and do not overflow off-screen on small mobile viewports.
+  `[@test] ../src/__tests__/navbar/navbar-responsive-design.test.tsx`
+
 ## Non-goals for scaffold phase
 
 - Advanced routing, role-based access, and full incident management workflows are out of scope.

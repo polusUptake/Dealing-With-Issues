@@ -5,7 +5,15 @@ import multer from 'multer';
 import crypto from 'crypto';
 import { initFirebaseAdmin } from './firebaseAdmin.js';
 import { uploadImageBuffer, uploadDataUrl } from './cloudinary.js';
-import { listTickets, saveTicket, voteTicket } from './reportsStore.js';
+import {
+  listTickets,
+  saveTicket,
+  voteTicket,
+  findMatchingClusterTickets,
+  evaluateCompositeSeverity,
+  batchUpdateClusterSeverity,
+  notifySeverityEscalation,
+} from './reportsStore.js';
 import { TicketDocument } from './types.js';
 
 const app = express();
@@ -20,6 +28,62 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 // 1. Initialize Firebase Admin
 const { configured, firestore } = initFirebaseAdmin();
+
+const HF_TOKEN = process.env.HF_API_TOKEN || process.env.VITE_HF_API_TOKEN || '';
+
+async function analyzeImageWithHuggingFace(
+  imageSource: Buffer | string,
+): Promise<{ aiVisionScore: number | null; aiClassification: string | null }> {
+  if (!HF_TOKEN) {
+    return { aiVisionScore: null, aiClassification: null };
+  }
+
+  try {
+    let bodyBuffer: Buffer;
+    if (Buffer.isBuffer(imageSource)) {
+      bodyBuffer = imageSource;
+    } else if (typeof imageSource === 'string' && imageSource.startsWith('data:')) {
+      const base64Data = imageSource.split(',')[1];
+      bodyBuffer = Buffer.from(base64Data, 'base64');
+    } else {
+      return { aiVisionScore: null, aiClassification: null };
+    }
+
+    const response = await fetch(
+      'https://api-inference.huggingface.co/models/Luwayy/disaster_images_model',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${HF_TOKEN}`,
+          'Content-Type': 'application/octet-stream',
+        },
+        body: new Uint8Array(bodyBuffer),
+      },
+    );
+
+    if (!response.ok) {
+      console.warn('Backend HF API call returned non-200 status:', response.status);
+      return { aiVisionScore: null, aiClassification: null };
+    }
+
+    const data = (await response.json()) as Array<{ label: string; score: number }> | { error?: string };
+    if (!Array.isArray(data) || data.length === 0) {
+      return { aiVisionScore: null, aiClassification: null };
+    }
+
+    const bestMatch = data.reduce((prev, current) => {
+      return (current.score ?? 0) > (prev.score ?? 0) ? current : prev;
+    }, data[0]);
+
+    const aiVisionScore = Math.round((bestMatch.score || 0) * 100);
+    const aiClassification = bestMatch.label || null;
+
+    return { aiVisionScore, aiClassification };
+  } catch (error) {
+    console.warn('Backend Hugging Face vision inference error:', error);
+    return { aiVisionScore: null, aiClassification: null };
+  }
+}
 
 // Helper to verify Cloudflare Turnstile token
 async function verifyTurnstileToken(token: string, remoteIp?: string): Promise<boolean> {
@@ -86,28 +150,45 @@ app.post('/api/reports', upload.single('image'), async (req: Request, res: Respo
     }
 
     let media: { url: string; public_id: string } | undefined = undefined;
+    let aiVisionScore: number | null = typeof req.body.aiVisionScore === 'number' ? req.body.aiVisionScore : null;
+    let aiClassification: string | null = req.body.aiClassification || req.body.aiMetadata?.classifiedCategory || null;
 
     // 1. Check if a binary file was uploaded via multipart/form-data
     if (req.file) {
-      const uploadResult = await uploadImageBuffer(req.file.buffer);
+      const [uploadResult, aiResult] = await Promise.all([
+        uploadImageBuffer(req.file.buffer),
+        analyzeImageWithHuggingFace(req.file.buffer),
+      ]);
       media = {
         url: uploadResult.url,
         public_id: uploadResult.public_id,
       };
+      if (aiResult.aiVisionScore !== null) aiVisionScore = aiResult.aiVisionScore;
+      if (aiResult.aiClassification) aiClassification = aiResult.aiClassification;
     } 
     // 2. Check if a base64 data URL was sent via JSON
     else if (typeof image === 'string' && image.startsWith('data:')) {
-      const uploadResult = await uploadDataUrl(image);
+      const [uploadResult, aiResult] = await Promise.all([
+        uploadDataUrl(image),
+        analyzeImageWithHuggingFace(image),
+      ]);
       media = {
         url: uploadResult.url,
         public_id: uploadResult.public_id,
       };
+      if (aiResult.aiVisionScore !== null) aiVisionScore = aiResult.aiVisionScore;
+      if (aiResult.aiClassification) aiClassification = aiResult.aiClassification;
     } else if (Array.isArray(images) && images.length > 0 && typeof images[0] === 'string' && images[0].startsWith('data:')) {
-      const uploadResult = await uploadDataUrl(images[0]);
+      const [uploadResult, aiResult] = await Promise.all([
+        uploadDataUrl(images[0]),
+        analyzeImageWithHuggingFace(images[0]),
+      ]);
       media = {
         url: uploadResult.url,
         public_id: uploadResult.public_id,
       };
+      if (aiResult.aiVisionScore !== null) aiVisionScore = aiResult.aiVisionScore;
+      if (aiResult.aiClassification) aiClassification = aiResult.aiClassification;
     }
 
     // Parse location coordinates
@@ -123,7 +204,9 @@ app.post('/api/reports', upload.single('image'), async (req: Request, res: Respo
     }
 
     const ticketId = req.body.id || crypto.randomUUID();
-    const newTicket: TicketDocument = {
+    const createdAt = req.body.createdAt ? Number(req.body.createdAt) : Date.now();
+
+    const candidateTicket: TicketDocument = {
       ticketId,
       id: ticketId,
       userId: userId || 'anonymous',
@@ -131,10 +214,13 @@ app.post('/api/reports', upload.single('image'), async (req: Request, res: Respo
       description: reportDesc,
       status: 'open',
       timestamp: new Date().toISOString(),
-      createdAt: req.body.createdAt ? Number(req.body.createdAt) : Date.now(),
+      createdAt,
       upvotes: 0,
       downvotes: 0,
       isRemote: typeof req.body.isRemote === 'boolean' ? req.body.isRemote : false,
+      aiClassification,
+      aiVisionScore,
+      compositeSeverity: 'LOW',
       location: lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng) ? {
         latitude: lat,
         longitude: lng,
@@ -145,12 +231,30 @@ app.post('/api/reports', upload.single('image'), async (req: Request, res: Respo
       media,
       imageUrls: media ? [media.url] : [],
       aiMetadata: {
-        confidenceScore: null,
-        classifiedCategory: null,
+        confidenceScore: aiVisionScore,
+        classifiedCategory: aiClassification,
       },
     };
 
-    const saved = await saveTicket(newTicket, firestore);
+    // Evaluate cluster and composite severity
+    const allTickets = await listTickets(firestore);
+    const clusterTickets = findMatchingClusterTickets(candidateTicket, allTickets);
+    const { severity, totalClusterCount } = evaluateCompositeSeverity(
+      clusterTickets,
+      aiVisionScore,
+      candidateTicket.createdAt
+    );
+
+    candidateTicket.compositeSeverity = severity;
+    candidateTicket.status = severity === 'HIGH' ? 'escalated' : severity === 'MEDIUM' ? 'developing' : 'open';
+
+    // If severity is escalated to MEDIUM or HIGH, batch-update the cluster
+    if (severity === 'HIGH' || severity === 'MEDIUM') {
+      await batchUpdateClusterSeverity(clusterTickets, severity, firestore);
+      notifySeverityEscalation(severity, totalClusterCount);
+    }
+
+    const saved = await saveTicket(candidateTicket, firestore);
 
     return res.status(201).json({
       success: true,
