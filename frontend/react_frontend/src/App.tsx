@@ -130,6 +130,8 @@ function App() {
   const [backendStatus, setBackendStatus] = useState<'unknown' | 'ready' | 'offline'>(
     'unknown',
   )
+  const [is3DMode, setIs3DMode] = useState(false)
+  const [mapLoaded, setMapLoaded] = useState(false)
   const [title, setTitle] = useState('')
   const [imageDataUrls, setImageDataUrls] = useState<string[]>([])
   const [formError, setFormError] = useState<string | null>(null)
@@ -174,16 +176,90 @@ function App() {
       attributionControl: true,
     })
 
+    map.on('load', () => {
+      map.addSource('mapbox-dem', {
+        type: 'raster-dem',
+        url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+        tileSize: 512,
+        maxzoom: 14,
+      })
+
+      const layers = map.getStyle()?.layers
+      const labelLayerId = layers?.find(
+        (layer) => layer.type === 'symbol' && layer.layout?.['text-field'],
+      )?.id
+
+      map.addLayer(
+        {
+          id: '3d-buildings',
+          source: 'composite',
+          'source-layer': 'building',
+          filter: ['==', 'extrude', 'true'],
+          type: 'fill-extrusion',
+          minzoom: 15,
+          paint: {
+            'fill-extrusion-color': '#aaa',
+            'fill-extrusion-height': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              15,
+              0,
+              15.05,
+              ['get', 'height'],
+            ],
+            'fill-extrusion-base': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              15,
+              0,
+              15.05,
+              ['get', 'min_height'],
+            ],
+            'fill-extrusion-opacity': 0.6,
+          },
+          layout: {
+            visibility: 'none',
+          },
+        },
+        labelLayerId,
+      )
+
+      setMapLoaded(true)
+    })
+
     map.addControl(new mapboxgl.NavigationControl(), 'bottom-right')
     mapRef.current = map
 
     return () => {
+      setMapLoaded(false)
       markersRef.current.forEach((marker) => marker.remove())
       markersRef.current = []
       map.remove()
       mapRef.current = null
     }
   }, [shouldRenderMap])
+
+  useEffect(() => {
+    if (!mapRef.current || !mapLoaded) return
+
+    const map = mapRef.current
+
+    if (is3DMode) {
+      map.setTerrain({ source: 'mapbox-dem', exaggeration: 1.5 })
+      if (map.getLayer('3d-buildings')) {
+        map.setLayoutProperty('3d-buildings', 'visibility', 'visible')
+      }
+      map.easeTo({ pitch: 60, duration: 1000 })
+    } else {
+      map.setTerrain(null)
+      if (map.getLayer('3d-buildings')) {
+        map.setLayoutProperty('3d-buildings', 'visibility', 'none')
+      }
+      map.easeTo({ pitch: 0, duration: 1000 })
+    }
+  }, [is3DMode, mapLoaded])
 
   useEffect(() => {
     if (!mapRef.current) {
@@ -571,11 +647,28 @@ function App() {
           {activeMobilePanel === 'map' ? (
             <section className="mobile-map">
               <div ref={mapContainerRef} className="map-canvas" />
-              {!MAPBOX_TOKEN ? (
+              {MAPBOX_TOKEN ? (
+                <div className="map-mode-toggle">
+                  <button
+                    type="button"
+                    onClick={() => setIs3DMode(false)}
+                    className={!is3DMode ? 'active' : ''}
+                  >
+                    2D
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIs3DMode(true)}
+                    className={is3DMode ? 'active' : ''}
+                  >
+                    3D
+                  </button>
+                </div>
+              ) : (
                 <div className="map-overlay-message">
                   Add VITE_MAPBOX_ACCESS_TOKEN to render the map.
                 </div>
-              ) : null}
+              )}
             </section>
           ) : null}
 
@@ -586,11 +679,28 @@ function App() {
       ) : (
         <section className="desktop-stage">
           <div ref={mapContainerRef} className="map-canvas" />
-          {!MAPBOX_TOKEN ? (
+          {MAPBOX_TOKEN ? (
+            <div className="map-mode-toggle desktop-toggle">
+              <button
+                type="button"
+                onClick={() => setIs3DMode(false)}
+                className={!is3DMode ? 'active' : ''}
+              >
+                2D
+              </button>
+              <button
+                type="button"
+                onClick={() => setIs3DMode(true)}
+                className={is3DMode ? 'active' : ''}
+              >
+                3D
+              </button>
+            </div>
+          ) : (
             <div className="map-overlay-message">
               Add VITE_MAPBOX_ACCESS_TOKEN to render the map.
             </div>
-          ) : null}
+          )}
 
           <aside className={`sidebar left ${leftCollapsed ? 'collapsed' : ''}`}>
             <button
