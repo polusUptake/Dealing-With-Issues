@@ -1,107 +1,48 @@
-import type { Firestore } from 'firebase-admin/firestore'
-import type { ReportPayload, StoredReport } from './types.js'
+import type { Firestore, QueryDocumentSnapshot } from 'firebase-admin/firestore'
+import type { TicketDocument } from './types.js'
 
-type StorageBucket = {
-  name: string
-  file: (path: string) => {
-    save: (
-      data: Buffer,
-      options: {
-        contentType: string
-        resumable: boolean
-        public: boolean
-      },
-    ) => Promise<void>
-  }
-}
+const memoryTickets = new Map<string, TicketDocument>()
 
-const memoryStore = new Map<string, StoredReport>()
-
-function stripDataUrlPrefix(dataUrl: string) {
-  const parts = dataUrl.split(',')
-  return parts.length > 1 ? parts[1] : dataUrl
-}
-
-async function uploadImagesToFirebase(
-  bucket: StorageBucket,
-  report: ReportPayload,
-): Promise<string[]> {
-  const imageUrls: string[] = []
-
-  for (let index = 0; index < report.images.length; index += 1) {
-    const base64 = stripDataUrlPrefix(report.images[index])
-    const filePath = `reports/${report.id}/image-${index}-${Date.now()}.jpg`
-    const file = bucket.file(filePath)
-
-    await file.save(Buffer.from(base64, 'base64'), {
-      contentType: 'image/jpeg',
-      resumable: false,
-      public: false,
-    })
-
-    imageUrls.push(`gs://${bucket.name}/${filePath}`)
-  }
-
-  return imageUrls
-}
-
-export async function listReports(
+export async function listTickets(
   firestore: Firestore | null,
-): Promise<StoredReport[]> {
+): Promise<TicketDocument[]> {
   if (!firestore) {
-    return Array.from(memoryStore.values()).sort((a, b) => b.createdAt - a.createdAt)
+    return Array.from(memoryTickets.values()).sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    )
   }
 
-  const snapshot = await firestore.collection('reports').get()
-  return snapshot.docs
-    .map((document) => {
-      const data = document.data() as Partial<StoredReport>
-      return {
-        id: document.id,
-        title: data.title ?? 'Untitled incident',
-        imageUrls: Array.isArray(data.imageUrls) ? data.imageUrls : [],
-        location: {
-          lat: data.location?.lat ?? 0,
-          lng: data.location?.lng ?? 0,
-        },
-        createdAt: data.createdAt ?? Date.now(),
-        updatedAt: data.updatedAt ?? Date.now(),
-      }
-    })
-    .sort((a, b) => b.createdAt - a.createdAt)
+  try {
+    const snapshot = await firestore.collection('tickets').orderBy('timestamp', 'desc').get()
+    return snapshot.docs.map((doc: QueryDocumentSnapshot) => doc.data() as TicketDocument)
+  } catch (error) {
+    console.error('Failed to list tickets from Firestore, falling back to memory store:', error)
+    return Array.from(memoryTickets.values()).sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    )
+  }
 }
 
-export async function upsertReport(
-  report: ReportPayload,
+export async function saveTicket(
+  ticket: TicketDocument,
   firestore: Firestore | null,
-  bucket: StorageBucket | null,
-): Promise<StoredReport> {
-  const now = Date.now()
+): Promise<TicketDocument> {
+  memoryTickets.set(ticket.ticketId, ticket)
 
-  if (!firestore || !bucket) {
-    const nextReport: StoredReport = {
-      id: report.id,
-      title: report.title,
-      imageUrls: [],
-      location: report.location,
-      createdAt: report.createdAt,
-      updatedAt: now,
+  if (firestore) {
+    try {
+      await firestore.collection('tickets').doc(ticket.ticketId).set(ticket, { merge: true })
+    } catch (error) {
+      console.error('Failed to save ticket to Firestore:', error)
     }
-
-    memoryStore.set(report.id, nextReport)
-    return nextReport
   }
 
-  const imageUrls = await uploadImagesToFirebase(bucket, report)
-  const nextReport: StoredReport = {
-    id: report.id,
-    title: report.title,
-    imageUrls,
-    location: report.location,
-    createdAt: report.createdAt,
-    updatedAt: now,
-  }
-
-  await firestore.collection('reports').doc(report.id).set(nextReport, { merge: true })
-  return nextReport
+  return ticket
 }
+
+// Backward-compatible aliases for legacy scaffold endpoints if needed
+export const listReports = listTickets
+export const upsertReport = async (
+  report: TicketDocument,
+  firestore: Firestore | null,
+): Promise<TicketDocument> => saveTicket(report, firestore)
