@@ -12,6 +12,8 @@ import {
 import {
   AreaChart,
   Area,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   Tooltip,
@@ -35,6 +37,7 @@ export interface AnalyticsReport {
   syncStatus?: 'pending' | 'synced'
   upvotes?: number
   downvotes?: number
+  isRemote?: boolean
 }
 
 interface AnalyticsPanelProps {
@@ -215,6 +218,17 @@ export default function AnalyticsPanel({
     ].filter((item) => item.value > 0)
   }, [contextReports])
 
+  // On-site vs. Remote Comparison Data for BarChart
+  const locationComparisonData = useMemo(() => {
+    if (!contextReports || contextReports.length === 0) return []
+    const onSite = contextReports.filter((r) => !r.isRemote).length
+    const remote = contextReports.filter((r) => r.isRemote === true).length
+    return [
+      { category: 'On-site', count: onSite, fill: '#1976d2' },
+      { category: 'Remote', count: remote, fill: '#f57c00' },
+    ]
+  }, [contextReports])
+
   const imageUrl = report.imageUrls?.[0] || report.images?.[0]
   const heroImageSrc = getHeroImage(imageUrl)
 
@@ -331,6 +345,36 @@ export default function AnalyticsPanel({
                 fill="url(#colorReports)"
               />
             </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Visual Statistics: Recharts Bar Chart (On-site vs. Remote) */}
+      <div className="chart-card">
+        <div className="chart-card-header">
+          <h3>Report Locations: On-site vs. Remote</h3>
+          <span className="chart-pill">Location Type</span>
+        </div>
+        <div className="chart-container-wrapper">
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={locationComparisonData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <XAxis dataKey="category" stroke="#8c7d6b" fontSize={11} tickLine={false} />
+              <YAxis allowDecimals={false} stroke="#8c7d6b" fontSize={10} tickLine={false} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: '#2c251d',
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#ffffff',
+                  fontSize: '12px',
+                }}
+              />
+              <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                {locationComparisonData.map((entry, index) => (
+                  <Cell key={`bar-${index}`} fill={entry.fill} />
+                ))}
+              </Bar>
+            </BarChart>
           </ResponsiveContainer>
         </div>
       </div>

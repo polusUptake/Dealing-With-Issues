@@ -31,6 +31,7 @@ export async function saveTicket(
     ...ticket,
     upvotes: typeof ticket.upvotes === 'number' ? ticket.upvotes : 0,
     downvotes: typeof ticket.downvotes === 'number' ? ticket.downvotes : 0,
+    isRemote: ticket.isRemote ?? false,
   }
 
   memoryTickets.set(normalizedTicket.ticketId, normalizedTicket)

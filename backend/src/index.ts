@@ -134,6 +134,7 @@ app.post('/api/reports', upload.single('image'), async (req: Request, res: Respo
       createdAt: req.body.createdAt ? Number(req.body.createdAt) : Date.now(),
       upvotes: 0,
       downvotes: 0,
+      isRemote: typeof req.body.isRemote === 'boolean' ? req.body.isRemote : false,
       location: lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng) ? {
         latitude: lat,
         longitude: lng,

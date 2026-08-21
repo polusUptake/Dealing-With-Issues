@@ -41,6 +41,7 @@ type ReportRecord = {
   turnstileToken?: string
   upvotes?: number
   downvotes?: number
+  isRemote?: boolean
 }
 
 type BackendReportRecord = Omit<ReportRecord, 'images' | 'syncStatus'> & {
@@ -97,6 +98,7 @@ function loadLocalReports(): ReportRecord[] {
         turnstileToken: candidate.turnstileToken,
         upvotes: typeof candidate.upvotes === 'number' ? candidate.upvotes : 0,
         downvotes: typeof candidate.downvotes === 'number' ? candidate.downvotes : 0,
+        isRemote: typeof candidate.isRemote === 'boolean' ? candidate.isRemote : false,
       } as ReportRecord
     })
   } catch {
@@ -208,6 +210,12 @@ function App() {
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(
     null,
   )
+  const [locationMode, setLocationMode] = useState<'gps' | 'pin' | null>(null)
+  const locationModeRef = useRef(locationMode)
+  locationModeRef.current = locationMode
+
+  const [isRemote, setIsRemote] = useState<boolean>(false)
+  const [draftPin, setDraftPin] = useState<{ lat: number; lng: number } | null>(null)
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null)
   const [activeMobilePanel, setActiveMobilePanel] = useState<
     'report' | 'map' | 'analytics'
@@ -257,11 +265,12 @@ function App() {
     map.addControl(new mapboxgl.NavigationControl(), 'bottom-right')
 
     map.on('click', (event) => {
-      if (!isPickingOnMapRef.current) {
+      if (!isPickingOnMapRef.current && locationModeRef.current !== 'pin') {
         return
       }
       const { lng, lat } = event.lngLat
       setLocation({ lat, lng })
+      setDraftPin({ lat, lng })
       setIsPickingOnMap(false)
       setFormError(null)
     })
@@ -416,6 +425,7 @@ function App() {
             createdAt: report.createdAt,
             turnstileToken: report.turnstileToken,
             'cf-turnstile-response': report.turnstileToken,
+            isRemote: report.isRemote || false,
           }),
         })
 
@@ -505,12 +515,13 @@ function App() {
     const nextReport: ReportRecord = {
       id: crypto.randomUUID(),
       title: trimmedTitle,
-      images: imageDataUrls,
+      images: locationMode === 'pin' ? [] : imageDataUrls,
       imageUrls: [],
       location,
       createdAt: Date.now(),
       syncStatus: 'pending',
       turnstileToken: turnstileToken || undefined,
+      isRemote: locationMode === 'pin' ? isRemote : false,
     }
 
     const nextReports = [nextReport, ...reportsRef.current]
@@ -519,6 +530,9 @@ function App() {
     setTitle('')
     setImageDataUrls([])
     setLocation(null)
+    setDraftPin(null)
+    setLocationMode(null)
+    setIsRemote(false)
     setIsPickingOnMap(false)
     setTurnstileToken(null)
 
@@ -745,20 +759,25 @@ function App() {
 
       {/* 1. Location Capture Section at the very top */}
       <div className="location-prompt-box location-first-box">
-        <p className="location-prompt-title">Location</p>
+        <p className="location-prompt-title">Location Mode</p>
         <div className="location-prompt-buttons">
           <button
             type="button"
-            className={`location-opt-btn ${location && !isPickingOnMap ? 'selected' : ''}`}
-            onClick={handleLocateUser}
+            className={`location-opt-btn ${locationMode === 'gps' || (location && !isPickingOnMap && locationMode !== 'pin') ? 'selected' : ''}`}
+            onClick={() => {
+              setLocationMode('gps')
+              setIsRemote(false)
+              handleLocateUser()
+            }}
             disabled={isLocating}
           >
-            {isLocating ? 'Capturing location...' : 'Use my location'}
+            {isLocating ? 'Capturing GPS...' : 'Use my location'}
           </button>
           <button
             type="button"
-            className={`location-opt-btn ${isPickingOnMap ? 'active' : ''}`}
+            className={`location-opt-btn ${locationMode === 'pin' || isPickingOnMap ? 'active' : ''}`}
             onClick={() => {
+              setLocationMode('pin')
               setIsPickingOnMap(true)
               setFormError(null)
               if (isMobile) {
@@ -772,12 +791,18 @@ function App() {
 
         {location ? (
           <div className="location-captured-badge">
-            <span>📍 Lat {location.lat.toFixed(4)}, Lng {location.lng.toFixed(4)}</span>
+            <span>
+              Lat {(draftPin?.lat ?? location.lat).toFixed(4)}, Lng{' '}
+              {(draftPin?.lng ?? location.lng).toFixed(4)}
+              {locationMode === 'pin' ? ' (Pinned)' : ' (GPS)'}
+            </span>
             <button
               type="button"
               className="clear-location-btn"
               onClick={() => {
                 setLocation(null)
+                setDraftPin(null)
+                setLocationMode(null)
                 setIsPickingOnMap(false)
                 if (selectedMarkerRef.current) {
                   selectedMarkerRef.current.remove()
@@ -789,8 +814,8 @@ function App() {
               ✕
             </button>
           </div>
-        ) : isPickingOnMap ? (
-          <p className="helper-text picking-highlight">📍 Click anywhere on the map to place disaster pin</p>
+        ) : locationMode === 'pin' || isPickingOnMap ? (
+          <p className="helper-text picking-highlight">Click anywhere on the map to set the incident location.</p>
         ) : (
           <p className="helper-text">Location not selected</p>
         )}
@@ -801,19 +826,27 @@ function App() {
       <input
         id="report-title"
         type="text"
-        placeholder="Disaster in my college"
+        placeholder="Bridge collapse near River Road"
         value={title}
         onChange={(event) => setTitle(event.target.value)}
       />
 
-      {/* 3. Add pictures file input & image count helper text */}
-      <label htmlFor="report-images">Add pictures</label>
+      {/* 3. Add pictures file input & image count helper text (Disabled if locationMode === 'pin') */}
+      <label
+        htmlFor="report-images"
+        className={locationMode === 'pin' ? 'disabled-label' : ''}
+      >
+        Add pictures {locationMode === 'pin' ? '(Disabled for Drop Pin)' : ''}
+      </label>
       <input
         id="report-images"
         type="file"
         accept="image/*"
         multiple
+        disabled={locationMode === 'pin'}
+        className={locationMode === 'pin' ? 'input-disabled' : ''}
         onChange={async (event) => {
+          if (locationMode === 'pin') return
           const files = event.target.files
           if (!files || files.length === 0) {
             setImageDataUrls([])
@@ -824,7 +857,25 @@ function App() {
           setImageDataUrls(dataUrls)
         }}
       />
-      <p className="helper-text">{imageDataUrls.length} image(s) attached</p>
+      {locationMode === 'pin' ? (
+        <p className="helper-text dimmed">Image upload is disabled for remote / drop-pin reports.</p>
+      ) : (
+        <p className="helper-text">{imageDataUrls.length} image(s) attached</p>
+      )}
+
+      {/* Checkbox for Remote / Secondhand reports (when locationMode === 'pin') */}
+      {locationMode === 'pin' ? (
+        <div className="remote-report-checkbox-group">
+          <label className="remote-checkbox-label">
+            <input
+              type="checkbox"
+              checked={isRemote}
+              onChange={(e) => setIsRemote(e.target.checked)}
+            />
+            <span>Did you see this incident somewhere else? (e.g., Social Media, News)</span>
+          </label>
+        </div>
+      ) : null}
 
       {formError ? <p className="error">{formError}</p> : null}
 
@@ -884,7 +935,7 @@ function App() {
                     </span>
                     <div className="similar-report-meta">
                       {distanceLabel ? (
-                        <span className="similar-report-distance">📍 {distanceLabel}</span>
+                        <span className="similar-report-distance">{distanceLabel}</span>
                       ) : null}
                       <small className="similar-report-date">
                         {new Date(similar.createdAt).toLocaleDateString()}
@@ -996,7 +1047,7 @@ function App() {
                       <h3 className="feed-card-title">{report.title}</h3>
                       <div className="feed-card-meta">
                         {distanceLabel ? (
-                          <span className="feed-card-distance">📍 {distanceLabel}</span>
+                          <span className="feed-card-distance">{distanceLabel}</span>
                         ) : null}
                         <span className="feed-card-timestamp">
                           <Clock size={12} /> {new Date(report.createdAt).toLocaleString()}
@@ -1080,7 +1131,7 @@ function App() {
               <div ref={mapContainerRef} className="map-canvas" />
               {isPickingOnMap ? (
                 <div className="map-picking-overlay">
-                  <span>📍 Tap map to set incident location</span>
+                  <span>Tap map to set incident location</span>
                   <button type="button" onClick={() => setIsPickingOnMap(false)}>
                     Cancel
                   </button>
@@ -1103,7 +1154,7 @@ function App() {
           <div ref={mapContainerRef} className="map-canvas" />
           {isPickingOnMap ? (
             <div className="map-picking-overlay">
-              <span>📍 Click anywhere on the map to pinpoint disaster location</span>
+              <span>Click anywhere on the map to pinpoint disaster location</span>
               <button type="button" onClick={() => setIsPickingOnMap(false)}>
                 Cancel
               </button>

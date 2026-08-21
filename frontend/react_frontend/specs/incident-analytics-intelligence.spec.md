@@ -1,6 +1,6 @@
 ---
 name: Incident Analytics Intelligence Dashboard
-description: Location-gated 15km ranked feed with click-to-expand Recharts analytics dashboard in the right sidebar
+description: Location-gated 15km ranked feed, Drop-Pin & Remote reporting tracking, and Recharts analytics dashboard in the right sidebar
 targets:
   - ../src/App.tsx
   - ../src/App.css
@@ -10,11 +10,24 @@ targets:
 
 # Location-Gated 15km Ranked Feed & Incident Analytics Intelligence
 
-Implements a location-gated, 15km proximity-ranked feed in the right sidebar that expands into full Recharts visual analytics upon clicking any incident report card.
+Implements a location-gated, 15km proximity-ranked feed in the right sidebar that expands into full Recharts visual analytics (including On-site vs. Remote classification) upon clicking any incident report card.
 
 ---
 
-## 1. Location-Gated Feed & Proximity Ranking
+## 1. Location Modes & Remote Incident Tracking
+
+Users can report incidents using one of two location capture workflows:
+
+### GPS Location vs. Drop Pin Mode
+- **GPS Location:** Uses device geolocation to capture high-accuracy coordinates on-site with image upload enabled.
+- **Drop Pin on Map:** Allows users to click anywhere on the Mapbox map to drop a pin.
+  - Image upload is disabled (`disabled={true}`) for drop-pin reports.
+  - Users are prompted with a checkbox: *"Did you see this incident somewhere else? (e.g., Social Media, News)"*, recording `isRemote: boolean`.
+  `[@test] ../src/__tests__/analytics/drop-pin-remote-mode.test.tsx`
+
+---
+
+## 2. Location-Gated Feed & Proximity Ranking
 
 The right sidebar's resting state is governed by user location:
 
@@ -32,7 +45,7 @@ The right sidebar's resting state is governed by user location:
 
 ---
 
-## 2. Scrollable Ranked Feed Cards
+## 3. Scrollable Ranked Feed Cards
 
 Renders a scrollable feed of all reports in `nearbyRankedReports`:
 - **Thumbnail:** Full-width Cloudinary dynamic crop `/c_fill,w_350,h_180,g_auto/` at the top of each card (or placeholder if no image).
@@ -43,24 +56,25 @@ Renders a scrollable feed of all reports in `nearbyRankedReports`:
 
 ---
 
-## 3. Click-to-Expand Incident Analytics View
+## 4. Click-to-Expand Incident Analytics View
 
 When a user clicks any report card from the ranked list:
 - Hides the scrollable feed and renders `AnalyticsPanel` specifically for that incident report.
 - **Back Navigation:** Prominent `"← Back to nearby reports"` button at the top to return to the feed.
   `[@test] ../src/__tests__/analytics/back-to-feed-button.test.tsx`
 
-### Analytics Panel Contents
+### Analytics Panel Contents & Charts
 - **Header:** Title, Distance, Severity badge (`LOW` | `MODERATE` | `HIGH` | `CRITICAL`), Confidence score %, raw upvotes & downvotes.
 - **Visual Analytics (`recharts`):**
-  - **Volume Progression (`AreaChart` / `LineChart`):** Chronological report accumulation and velocity.
+  - **Volume Progression (`AreaChart`):** Chronological report accumulation and velocity.
+  - **Report Locations: On-site vs. Remote (`BarChart`):** Discrete bar chart comparing firsthand on-site submissions (`isRemote === false`) with secondhand / remote reports (`isRemote === true`).
   - **Source Breakdown (`PieChart` / Donut):** Distribution between Firsthand Witness, Nearby Observer, and Remote / Unverified.
   - **Supporting Evidence Breakdown:** Photographic media proportion progress bar.
   `[@test] ../src/__tests__/analytics/incident-analytics-charts.test.tsx`
 
 ---
 
-## 4. Vocabulary & Metric Standardization
+## 5. Vocabulary & Metric Standardization
 
 - **Terminology:** Only `upvotes` and `downvotes` are used throughout UI components.
 - **Raw Counts:** All metrics show exact raw integer counts for upvotes and downvotes without net score calculations.

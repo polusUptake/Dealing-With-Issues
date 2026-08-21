@@ -15,6 +15,7 @@ export interface ReportPayload {
   address?: string;
   images?: string[];
   createdAt?: number;
+  isRemote?: boolean;
 }
 
 export interface TicketDocument {
@@ -28,6 +29,7 @@ export interface TicketDocument {
   createdAt?: number;
   upvotes: number;
   downvotes: number;
+  isRemote?: boolean;
   location?: {
     latitude: number;
     longitude: number;
