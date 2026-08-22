@@ -520,13 +520,11 @@
   background: var(--accent-yellow);
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  transition: transform 180ms ease, box-shadow 180ms ease;
   transition: box-shadow 150ms ease, background-color 150ms ease, border-color 150ms ease;
   pointer-events: auto;
 }
 
 .report-marker:hover {
-  transform: scale(1.3);
   box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.5), 0 4px 12px rgba(0, 0, 0, 0.6);
 }
 
@@ -573,55 +571,69 @@
 
 @keyframes pulse-marker {
   0% {
-    transform: scale(1);
     box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7);
   }
   70% {
-    transform: scale(1.1);
     box-shadow: 0 0 0 8px rgba(37, 99, 235, 0);
   }
   100% {
-    transform: scale(1);
     box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
   }
 }
 
 /* Mapbox Popup Overrides for Dark Mode */
+.mapboxgl-popup {
+  z-index: 35 !important;
+}
+
 .mapboxgl-popup-content {
-  background: rgba(18, 18, 24, 0.92) !important;
+  background: rgba(18, 18, 24, 0.95) !important;
   color: #f5f5f7 !important;
   border: 1px solid rgba(255, 255, 255, 0.15) !important;
-  border-radius: 10px !important;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
-  padding: 10px 14px !important;
+  border-radius: 12px !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6) !important;
+  padding: 12px 14px !important;
   font-size: 0.84rem !important;
+}
+
+.mapboxgl-popup-close-button {
+  color: #a1a1aa !important;
+  padding: 4px 8px !important;
+  font-size: 16px !important;
+}
+
+.mapboxgl-popup-close-button:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
 }
 
 .mapboxgl-popup-content h4 {
   margin: 0 0 4px;
-  font-size: 0.92rem;
+  font-size: 0.95rem;
+  font-weight: 700;
   color: #ffffff;
 }
 
 .mapboxgl-popup-content p {
   margin: 2px 0;
   color: #a1a1aa;
+  font-size: 0.8rem;
 }
 
 .mapboxgl-popup-anchor-top .mapboxgl-popup-tip {
-  border-bottom-color: rgba(18, 18, 24, 0.92) !important;
+  border-bottom-color: rgba(18, 18, 24, 0.95) !important;
 }
 
 .mapboxgl-popup-anchor-bottom .mapboxgl-popup-tip {
-  border-top-color: rgba(18, 18, 24, 0.92) !important;
+  border-top-color: rgba(18, 18, 24, 0.95) !important;
 }
 
 .mapboxgl-popup-anchor-left .mapboxgl-popup-tip {
-  border-right-color: rgba(18, 18, 24, 0.92) !important;
+  border-right-color: rgba(18, 18, 24, 0.95) !important;
 }
 
 .mapboxgl-popup-anchor-right .mapboxgl-popup-tip {
-  border-left-color: rgba(18, 18, 24, 0.92) !important;
+  border-left-color: rgba(18, 18, 24, 0.95) !important;
 }
 
 /* ==========================================================================
@@ -1146,34 +1158,44 @@
 .readonly-vote-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 4px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-subtle);
+  gap: 10px;
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: rgba(14, 14, 18, 0.85);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  position: relative;
+  z-index: 2;
 }
 
 .readonly-vote {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 0.76rem;
-  font-weight: 600;
-  padding: 3px 8px;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 4px 10px;
   border-radius: 6px;
 }
 
 .readonly-vote.up {
   color: #6ee7b7;
-  background: rgba(16, 185, 129, 0.15);
+  background: rgba(16, 185, 129, 0.2);
+  border: 1px solid rgba(16, 185, 129, 0.4);
 }
 
 .readonly-vote.down {
   color: #fca5a5;
-  background: rgba(239, 68, 68, 0.15);
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.4);
 }
 
 .readonly-vote.timestamp {
-  color: var(--text-muted);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   margin-left: auto;
 }
 
@@ -1385,6 +1407,32 @@
 
 .navbar-action-btn.coordinate-btn:hover {
   border-color: var(--border-strong);
+}
+
+.floating-navbar .coordinate-btn.active-mode {
+  background-color: #16a34a; /* Vibrant Green */
+  color: #ffffff;
+  border-color: #16a34a;
+  box-shadow: 0 4px 14px rgba(22, 163, 74, 0.45);
+}
+
+.floating-navbar .coordinate-btn.active-mode:hover {
+  background-color: #15803d;
+  border-color: #15803d;
+}
+
+/* Hide the delegate button by default */
+.custom-popup-content .delegate-btn {
+  display: none;
+  margin-top: 10px;
+  width: 100%;
+  font-size: 0.8rem;
+  padding: 6px 12px;
+}
+
+/* Show the delegate button ONLY when the parent app-shell has the coordination-active class */
+.app-shell.coordination-active .custom-popup-content .delegate-btn {
+  display: block;
 }
 
 .navbar-action-btn.register-org-btn {

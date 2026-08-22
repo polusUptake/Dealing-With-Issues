@@ -3,7 +3,6 @@ import {
   ThumbsUp,
   ThumbsDown,
   ArrowLeft,
-  ShieldCheck,
   AlertTriangle,
   MapPin,
   Layers,
@@ -39,6 +38,8 @@ export interface AnalyticsReport {
   downvotes?: number
   isRemote?: boolean
   aiClassification?: string | null
+  compositeSeverity?: 'LOW' | 'MEDIUM' | 'HIGH'
+  aiVisionScore?: number | null
 }
 
 interface AnalyticsPanelProps {
@@ -278,10 +279,10 @@ export default function AnalyticsPanel({
         {/* Read-only Upvotes & Downvotes */}
         <div className="readonly-vote-bar">
           <span className="readonly-vote up">
-            <ThumbsUp size={14} /> {report.upvotes || 0} upvotes
+            <ThumbsUp size={12} /> {report.upvotes || 0}
           </span>
           <span className="readonly-vote down">
-            <ThumbsDown size={14} /> {report.downvotes || 0} downvotes
+            <ThumbsDown size={12} /> {report.downvotes || 0}
           </span>
           <span className="readonly-vote timestamp">
             <Clock size={12} /> {new Date(report.createdAt).toLocaleTimeString()}
@@ -305,9 +306,6 @@ export default function AnalyticsPanel({
           <div className="intel-stat-card">
             <span className="stat-label">Confidence</span>
             <strong className="stat-value text-blue">{metrics.confidenceScore}%</strong>
-            <small className="stat-sub">
-              <ShieldCheck size={11} /> Evidence-backed
-            </small>
           </div>
 
           <div className="intel-stat-card">
@@ -392,7 +390,7 @@ export default function AnalyticsPanel({
       {/* Visual Statistics: Recharts Donut Chart */}
       <div className="chart-card">
         <div className="chart-card-header">
-          <h3>Report Source Breakdown</h3>
+          <h3>Report Sources</h3>
           <Layers size={14} className="text-muted" />
         </div>
         <div className="donut-chart-container">
@@ -433,24 +431,6 @@ export default function AnalyticsPanel({
               />
             </PieChart>
           </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Supporting Evidence Coverage */}
-      <div className="chart-card">
-        <div className="chart-card-header">
-          <h3>Supporting Evidence Coverage</h3>
-          <span className="coverage-pct">{metrics.evidencePercentage}% media</span>
-        </div>
-        <div className="evidence-progress-bar-bg">
-          <div
-            className="evidence-progress-bar-fill"
-            style={{ width: `${metrics.evidencePercentage}%` }}
-          />
-        </div>
-        <div className="evidence-footer">
-          <span>📷 {metrics.reportsWithPhotos} photo verified</span>
-          <span>📝 {metrics.total - metrics.reportsWithPhotos} text reports</span>
         </div>
       </div>
     </section>

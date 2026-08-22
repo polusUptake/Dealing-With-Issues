@@ -15,7 +15,15 @@ export async function listTickets(
 
   try {
     const snapshot = await firestore.collection('tickets').orderBy('timestamp', 'desc').get()
-    return snapshot.docs.map((doc: QueryDocumentSnapshot) => doc.data() as TicketDocument)
+    return snapshot.docs.map((doc: QueryDocumentSnapshot) => {
+      const data = doc.data() as TicketDocument
+      const resolvedId = data.id || data.ticketId || doc.id
+      return {
+        ...data,
+        id: resolvedId,
+        ticketId: resolvedId,
+      }
+    })
   } catch (error) {
     console.error('Failed to list tickets from Firestore, falling back to memory store:', error)
     return Array.from(memoryTickets.values()).sort(
@@ -28,8 +36,11 @@ export async function saveTicket(
   ticket: TicketDocument,
   firestore: Firestore | null,
 ): Promise<TicketDocument> {
+  const resolvedId = ticket.ticketId || ticket.id || crypto.randomUUID()
   const normalizedTicket: TicketDocument = {
     ...ticket,
+    id: resolvedId,
+    ticketId: resolvedId,
     upvotes: typeof ticket.upvotes === 'number' ? ticket.upvotes : 0,
     downvotes: typeof ticket.downvotes === 'number' ? ticket.downvotes : 0,
     isRemote: ticket.isRemote ?? false,
@@ -38,11 +49,11 @@ export async function saveTicket(
     aiVisionScore: typeof ticket.aiVisionScore === 'number' ? ticket.aiVisionScore : null,
   }
 
-  memoryTickets.set(normalizedTicket.ticketId, normalizedTicket)
+  memoryTickets.set(resolvedId, normalizedTicket)
 
   if (firestore) {
     try {
-      await firestore.collection('tickets').doc(normalizedTicket.ticketId).set(normalizedTicket, { merge: true })
+      await firestore.collection('tickets').doc(resolvedId).set(normalizedTicket, { merge: true })
     } catch (error) {
       console.error('Failed to save ticket to Firestore:', error)
     }
@@ -63,39 +74,70 @@ export async function voteTicket(
 ): Promise<VoteResult> {
   if (firestore) {
     try {
-      const ticketRef = firestore.collection('tickets').doc(ticketId)
-      const existingDoc = await ticketRef.get()
+      let ticketRef = firestore.collection('tickets').doc(ticketId)
+      let existingDoc = await ticketRef.get()
 
       if (!existingDoc.exists) {
-        return { notFound: true }
+        // Fallback: search by ticketId field
+        const query1 = await firestore.collection('tickets').where('ticketId', '==', ticketId).limit(1).get()
+        if (!query1.empty) {
+          existingDoc = query1.docs[0]
+          ticketRef = existingDoc.ref
+        } else {
+          // Fallback: search by id field
+          const query2 = await firestore.collection('tickets').where('id', '==', ticketId).limit(1).get()
+          if (!query2.empty) {
+            existingDoc = query2.docs[0]
+            ticketRef = existingDoc.ref
+          }
+        }
       }
 
-      // Increment upvotes or downvotes using FieldValue.increment
-      await ticketRef.update({
-        [action === 'upvote' ? 'upvotes' : 'downvotes']: FieldValue.increment(1),
-      })
+      if (existingDoc && existingDoc.exists) {
+        // Increment upvotes or downvotes using FieldValue.increment
+        await ticketRef.update({
+          [action === 'upvote' ? 'upvotes' : 'downvotes']: FieldValue.increment(1),
+        })
 
-      const updatedDoc = await ticketRef.get()
-      const data = updatedDoc.data() as TicketDocument
-      const upvotes = typeof data.upvotes === 'number' ? data.upvotes : 0
-      const downvotes = typeof data.downvotes === 'number' ? data.downvotes : 0
+        const updatedDoc = await ticketRef.get()
+        const data = updatedDoc.data() as TicketDocument
+        const upvotes = typeof data.upvotes === 'number' ? data.upvotes : 0
+        const downvotes = typeof data.downvotes === 'number' ? data.downvotes : 0
 
-      // Moderation threshold: net negative score >= 100
-      if (downvotes - upvotes >= 100) {
-        await ticketRef.delete()
-        memoryTickets.delete(ticketId)
-        return { deleted: true, ticketId }
+        const resolvedId = data.id || data.ticketId || updatedDoc.id
+        // Moderation threshold: net negative score >= 100
+        if (downvotes - upvotes >= 100) {
+          await ticketRef.delete()
+          memoryTickets.delete(resolvedId)
+          memoryTickets.delete(ticketId)
+          return { deleted: true, ticketId: resolvedId }
+        }
+
+        const updatedTicket: TicketDocument = {
+          ...data,
+          id: resolvedId,
+          ticketId: resolvedId,
+        }
+        memoryTickets.set(resolvedId, updatedTicket)
+        memoryTickets.set(ticketId, updatedTicket)
+        return { deleted: false, ticket: updatedTicket }
       }
-
-      memoryTickets.set(ticketId, data)
-      return { deleted: false, ticket: data }
     } catch (error) {
       console.error('Firestore vote error, trying memory store:', error)
     }
   }
 
   // Fallback / in-memory store voting
-  const ticket = memoryTickets.get(ticketId)
+  let ticket = memoryTickets.get(ticketId)
+  if (!ticket) {
+    for (const val of memoryTickets.values()) {
+      if (val.id === ticketId || val.ticketId === ticketId) {
+        ticket = val
+        break
+      }
+    }
+  }
+
   if (!ticket) {
     return { notFound: true }
   }
@@ -106,11 +148,14 @@ export async function voteTicket(
     ticket.downvotes = (ticket.downvotes || 0) + 1
   }
 
+  const resolvedId = ticket.id || ticket.ticketId || ticketId
   if ((ticket.downvotes || 0) - (ticket.upvotes || 0) >= 100) {
+    memoryTickets.delete(resolvedId)
     memoryTickets.delete(ticketId)
-    return { deleted: true, ticketId }
+    return { deleted: true, ticketId: resolvedId }
   }
 
+  memoryTickets.set(resolvedId, ticket)
   memoryTickets.set(ticketId, ticket)
   return { deleted: false, ticket }
 }

@@ -150,11 +150,43 @@ The navbar must be persistently visible over the map interface.
 - Contains three evenly spaced buttons: "Coordinate", "Register org", and "SOS".
   `[@test] ../src/__tests__/navbar/navbar-positioning.test.tsx`
 
-### 2. "Coordinate" Button (Placeholder)
+### 2. "Coordinate" Mode Toggle & Volunteer Delegation
 
-- Renders a button labeled "Coordinate".
-- Currently performs no action when clicked (no-op).
-  `[@test] ../src/__tests__/navbar/coordinate-noop.test.tsx`
+The "Coordinate" button in the floating navbar controls the application's Volunteer Coordination Mode.
+
+#### 2.1 Mode Toggle & Visual State
+- Clicking "Coordinate" toggles `isCoordinationMode` between `true` and `false`.
+- When ON (`isCoordinationMode === true`):
+  - The "Coordinate" button applies the `.active-mode` class, styling it in vibrant green (`#16a34a`) with a green glow shadow.
+  - The root `<main className="app-shell">` applies the `.coordination-active` class.
+- When OFF (`isCoordinationMode === false`):
+  - The button returns to its default translucent/dark theme styling.
+  - The `.coordination-active` class is removed from the root app-shell.
+- Toggle state is synchronized with a ref (`isCoordinationModeRef`) to allow Mapbox event listeners to read the live mode without map teardowns.
+
+`[@test] ../src/__tests__/navbar/coordinate-mode-toggle.test.tsx`
+
+#### 2.2 Dynamic Volunteer Delegation in Marker Popups
+- Mapbox incident markers contain custom DOM popups with:
+  - Incident title `<h4>`.
+  - Severity indicator `<p>`.
+  - Timestamp `<p>`.
+  - A "Delegate Volunteers" button (`<button className="delegate-btn primary">`).
+- **Visibility**:
+  - When Coordination Mode is OFF, the "Delegate Volunteers" button is hidden (`display: none`).
+  - When Coordination Mode is ON (`.app-shell.coordination-active`), the "Delegate Volunteers" button is visible on all opened marker popups.
+- **Action & PWA Notifications**:
+  - Clicking "Delegate Volunteers" dispatches a notification via the PWA Service Worker (`ServiceWorkerRegistration.showNotification()` with fallback to the native `Notification` API) without blocking window alert popups.
+  - The notification payload includes:
+    - **Title**: `Delegation: <Incident Title>`
+    - **Disaster Type**: Derived from AI classification or title (e.g., `report.aiClassification || report.title || 'Disaster Incident'`).
+    - **Location Information**: Exact incident coordinates (`Lat: <latitude>, Lng: <longitude>`).
+    - **Severity Level**: Composite severity (`report.compositeSeverity || 'LOW'`).
+    - **Icon & Badge**: Incident media thumbnail or app PWA icons.
+- **Marker Interaction**:
+  - Clicking a marker explicitly toggles its popup and selects the incident without destroying/recreating Mapbox markers.
+
+`[@test] ../src/__tests__/navbar/volunteer-delegation-popup.test.tsx`
 
 ### 3. "Register org" Flow
 
@@ -180,20 +212,26 @@ Clicking "Register org" opens a centered overlay/modal blocking interaction with
 
 ### 4. "SOS" Button Flow
 
-The SOS button executes two distinct actions simultaneously to assist the user in an emergency.
+The SOS button executes emergency notification and alerting actions simultaneously.
 
-#### 4.1 Native Browser Notification
-- When "SOS" is clicked, the app must check for `Notification` API support and current permission status.
-- If permissions are not granted, it must call `Notification.requestPermission()`.
-- Once granted, it must trigger a local system notification (e.g., `new Notification('SOS Alert', { body: 'Emergency alert triggered.' })`).
+#### 4.1 PWA Service Worker & Browser Notification
+- When "SOS" is clicked, the app verifies notification permissions, calling `Notification.requestPermission()` if in default state.
+- Once granted, dispatches an emergency notification via the PWA Service Worker (`ServiceWorkerRegistration.showNotification('SOS Alert', { body: 'Emergency alert triggered. Please contact emergency services.', icon: '/pwa-192x192.png', badge: '/pwa-192x192.png', tag: 'sos-alert' })`).
+- If the Service Worker is initializing or not yet ready, gracefully falls back to the native `Notification` constructor.
   `[@test] ../src/__tests__/navbar/sos-native-notification.test.tsx`
 
 #### 4.2 Local Alert Dialog
-- Immediately alongside the notification attempt, the app must display a highly visible on-screen dialog or native `window.alert()`.
-- The dialog must explicitly state the text: `"Call 112"`.
+- Immediately alongside the notification attempt, displays a dedicated on-screen glassmorphic modal dialog.
+- The dialog explicitly states emergency instructions and prompts the user to call `"Call 112"`.
   `[@test] ../src/__tests__/navbar/sos-alert-dialog.test.tsx`
 
-### 5. CSS & Responsiveness
+### 5. PWA Service Worker & Offline Lifecycle
+
+- Service Worker is automatically registered on application initialization via `registerSW({ immediate: true })`.
+- Development mode activates the Service Worker (`devOptions.enabled: true`) to ensure notifications and offline caches work consistently across dev and production environments.
+  `[@test] ../src/__tests__/pwa/service-worker-lifecycle.test.tsx`
+
+### 6. CSS & Responsiveness
 
 - Ensure the floating navbar collapses elegantly on mobile screens (e.g., reducing padding or stacking horizontally if the screen is exceptionally narrow).
 - Ensure the Registration Modal and SOS Dialog are responsive and do not overflow off-screen on small mobile viewports.

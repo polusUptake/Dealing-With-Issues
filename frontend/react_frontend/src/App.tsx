@@ -245,11 +245,14 @@ function mergeReports(
     } else {
       merged.set(report.id, {
         ...existing,
-        title: report.title,
+        title: report.title || existing.title,
         imageUrls: report.imageUrls.length > 0 ? report.imageUrls : existing.imageUrls,
-        location: report.location,
-        upvotes: typeof report.upvotes === 'number' ? report.upvotes : (existing.upvotes || 0),
-        downvotes: typeof report.downvotes === 'number' ? report.downvotes : (existing.downvotes || 0),
+        location: report.location || existing.location,
+        upvotes: Math.max(existing.upvotes || 0, typeof report.upvotes === 'number' ? report.upvotes : 0),
+        downvotes: Math.max(existing.downvotes || 0, typeof report.downvotes === 'number' ? report.downvotes : 0),
+        aiClassification: report.aiClassification || existing.aiClassification || null,
+        compositeSeverity: report.compositeSeverity || existing.compositeSeverity || 'LOW',
+        aiVisionScore: typeof report.aiVisionScore === 'number' ? report.aiVisionScore : existing.aiVisionScore,
       })
     }
   }
@@ -272,6 +275,61 @@ function useIsMobile(): boolean {
   }, [])
 
   return isMobile
+}
+
+async function showPwaNotification(title: string, options: NotificationOptions) {
+  if (typeof window === 'undefined' || !('Notification' in window)) {
+    return
+  }
+
+  let permission = Notification.permission
+  if (permission === 'default') {
+    try {
+      permission = await Notification.requestPermission()
+    } catch (e) {
+      console.warn('Notification permission request error:', e)
+    }
+  }
+
+  if (permission !== 'granted') {
+    console.warn('Notification permission is not granted:', permission)
+    return
+  }
+
+  // 1. Try active Service Worker registration
+  if ('serviceWorker' in navigator) {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration()
+      if (reg && typeof reg.showNotification === 'function') {
+        await reg.showNotification(title, options)
+        return
+      }
+    } catch (err) {
+      console.warn('Service worker showNotification failed, trying fallback:', err)
+    }
+  }
+
+  // 2. Direct fallback to new Notification constructor
+  try {
+    new Notification(title, options)
+  } catch (err) {
+    console.warn('Notification fallback constructor failed:', err)
+  }
+}
+
+function sendDelegationNotification(report: ReportRecord) {
+  const disasterType = report.aiClassification || report.title || 'Disaster Incident'
+  const locationInfo = `Lat: ${report.location.lat.toFixed(4)}, Lng: ${report.location.lng.toFixed(4)}`
+  const title = `Delegation: ${report.title}`
+  const body = `Type: ${disasterType} • Location: ${locationInfo} • Severity: ${report.compositeSeverity || 'LOW'}`
+  const options: NotificationOptions = {
+    body,
+    icon: report.imageUrls?.[0] || report.images?.[0] || '/pwa-192x192.png',
+    badge: '/pwa-192x192.png',
+    tag: `delegation-${report.id}`,
+  }
+
+  void showPwaNotification(title, options)
 }
 
 function App() {
@@ -322,6 +380,12 @@ function App() {
   const [orgEmail, setOrgEmail] = useState('')
   const [registrationStatus, setRegistrationStatus] = useState<string | null>(null)
   const [isSosAlertOpen, setIsSosAlertOpen] = useState(false)
+  const [isCoordinationMode, setIsCoordinationMode] = useState(false)
+  const isCoordinationModeRef = useRef(isCoordinationMode)
+
+  useEffect(() => {
+    isCoordinationModeRef.current = isCoordinationMode
+  }, [isCoordinationMode])
 
   const isMobile = useIsMobile()
   const shouldRenderMap = !isMobile || activeMobilePanel === 'map'
@@ -635,23 +699,64 @@ function App() {
       markerElement.type = 'button'
       markerElement.title = `${report.title} (${report.compositeSeverity || 'LOW'} severity)`
 
-      markerElement.addEventListener('click', (e) => {
+      const popupNode = document.createElement('div')
+      popupNode.className = 'custom-popup-content'
+
+      const titleNode = document.createElement('h4')
+      titleNode.innerText = report.title
+      popupNode.appendChild(titleNode)
+
+      const severityP = document.createElement('p')
+      severityP.innerHTML = `Severity: <strong>${report.compositeSeverity || 'LOW'}</strong>`
+      popupNode.appendChild(severityP)
+
+      const timeP = document.createElement('p')
+      timeP.innerText = new Date(report.createdAt).toLocaleString()
+      popupNode.appendChild(timeP)
+
+      const delegateBtn = document.createElement('button')
+      delegateBtn.type = 'button'
+      delegateBtn.className = 'delegate-btn primary'
+      delegateBtn.innerText = 'Delegate Volunteers'
+      delegateBtn.onclick = (e) => {
         e.stopPropagation()
-        setSelectedReportId(report.id)
-      })
+        // Safety check: Only execute if the ref says coordination mode is active
+        if (isCoordinationModeRef.current) {
+          sendDelegationNotification(report)
+        }
+      }
+      popupNode.appendChild(delegateBtn)
+
+      const popup = new mapboxgl.Popup({ closeButton: true, offset: 16 }).setDOMContent(popupNode)
 
       const marker = new mapboxgl.Marker({ element: markerElement })
         .setLngLat([report.location.lng, report.location.lat])
-        .setPopup(
-          new mapboxgl.Popup({ closeButton: false, offset: 12 }).setHTML(
-            `<h4>${report.title}</h4><p>Severity: <strong>${report.compositeSeverity || 'LOW'}</strong></p><p>${new Date(report.createdAt).toLocaleString()}</p>`,
-          ),
-        )
+        .setPopup(popup)
         .addTo(mapRef.current)
+
+      ;(marker as any)._reportId = report.id
+
+      markerElement.addEventListener('click', (e) => {
+        e.stopPropagation()
+        setSelectedReportId(report.id)
+        marker.togglePopup()
+      })
 
       markersRef.current.push(marker)
     }
-  }, [reports, selectedReportId])
+  }, [reports])
+
+  useEffect(() => {
+    markersRef.current.forEach((marker) => {
+      const el = marker.getElement()
+      const isSelected = (marker as any)._reportId === selectedReportId
+      if (isSelected) {
+        el.classList.add('selected')
+      } else {
+        el.classList.remove('selected')
+      }
+    })
+  }, [selectedReportId])
 
   useEffect(() => {
     const map = mapRef.current
@@ -1065,10 +1170,10 @@ function App() {
   }, [title, location, reports])
 
   async function handleVote(reportId: string, action: 'upvote' | 'downvote') {
-    // 1. Optimistic update in local state
-    setReports((current) =>
-      current.map((r) => {
-        if (r.id !== reportId) return r
+    // 1. Optimistic update in local state and persistence
+    setReports((current) => {
+      const updated = current.map((r) => {
+        if (r.id !== reportId && (r as any).ticketId !== reportId) return r
         const up = r.upvotes || 0
         const down = r.downvotes || 0
         return {
@@ -1077,7 +1182,9 @@ function App() {
           downvotes: action === 'downvote' ? down + 1 : down,
         }
       })
-    )
+      saveLocalReports(updated)
+      return updated
+    })
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/reports/${reportId}/vote`, {
@@ -1089,7 +1196,8 @@ function App() {
       })
 
       if (!response.ok) {
-        throw new Error('Vote failed')
+        console.warn('Backend vote endpoint returned non-200, local vote preserved.')
+        return
       }
 
       const data = (await response.json()) as {
@@ -1100,14 +1208,18 @@ function App() {
 
       if (data.deleted) {
         // Auto-deletion threshold reached: remove from state & map
-        setReports((current) => current.filter((r) => r.id !== reportId))
+        setReports((current) => {
+          const filtered = current.filter((r) => r.id !== reportId && (r as any).ticketId !== reportId)
+          saveLocalReports(filtered)
+          return filtered
+        })
         if (selectedReportId === reportId) {
           setSelectedReportId(null)
         }
       } else if (data.ticket) {
-        setReports((current) =>
-          current.map((r) =>
-            r.id === reportId
+        setReports((current) => {
+          const synced = current.map((r) =>
+            r.id === reportId || (r as any).ticketId === reportId
               ? {
                   ...r,
                   upvotes: data.ticket?.upvotes ?? r.upvotes,
@@ -1115,28 +1227,13 @@ function App() {
                 }
               : r
           )
-        )
+          saveLocalReports(synced)
+          return synced
+        })
       }
     } catch (err) {
-      console.error('Failed to submit vote:', err)
-      // Rollback optimistic vote
-      setReports((current) =>
-        current.map((r) => {
-          if (r.id !== reportId) return r
-          const up = r.upvotes || 0
-          const down = r.downvotes || 0
-          return {
-            ...r,
-            upvotes: action === 'upvote' ? Math.max(0, up - 1) : up,
-            downvotes: action === 'downvote' ? Math.max(0, down - 1) : down,
-          }
-        })
-      )
+      console.warn('Network error during vote sync, local vote preserved:', err)
     }
-  }
-
-  const handleCoordinate = () => {
-    // Coordinate button performs no action (placeholder)
   }
 
   const handleOpenRegisterModal = () => {
@@ -1157,26 +1254,14 @@ function App() {
   }
 
   const handleSOS = () => {
-    // 1. Native Browser Notification
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      if (Notification.permission === 'granted') {
-        try {
-          new Notification('SOS Alert', { body: 'Emergency alert triggered.' })
-        } catch (e) {
-          console.warn('Native notification error:', e)
-        }
-      } else if (Notification.permission !== 'denied') {
-        Notification.requestPermission().then((permission) => {
-          if (permission === 'granted') {
-            try {
-              new Notification('SOS Alert', { body: 'Emergency alert triggered.' })
-            } catch (e) {
-              console.warn('Native notification error:', e)
-            }
-          }
-        })
-      }
+    // 1. Native / PWA Browser Notification
+    const options: NotificationOptions = {
+      body: 'Emergency alert triggered. Please contact emergency services.',
+      icon: '/pwa-192x192.png',
+      badge: '/pwa-192x192.png',
+      tag: 'sos-alert',
     }
+    void showPwaNotification('SOS Alert', options)
 
     // 2. Local Alert Dialog (Calls attention to Call 112)
     setIsSosAlertOpen(true)
@@ -1376,7 +1461,11 @@ function App() {
                     <button
                       type="button"
                       className="vote-btn upvote"
-                      onClick={() => handleVote(similar.id, 'upvote')}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        handleVote(similar.id, 'upvote')
+                      }}
                       disabled={!location}
                       title={location ? 'Upvote this report' : 'Capture your location to vote'}
                       aria-label="Upvote"
@@ -1387,7 +1476,11 @@ function App() {
                     <button
                       type="button"
                       className="vote-btn downvote"
-                      onClick={() => handleVote(similar.id, 'downvote')}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        handleVote(similar.id, 'downvote')
+                      }}
                       disabled={!location}
                       title={location ? 'Downvote this report' : 'Capture your location to vote'}
                       aria-label="Downvote"
@@ -1511,7 +1604,7 @@ function App() {
   )
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${isCoordinationMode ? 'coordination-active' : ''}`}>
       {backendStatus === 'offline' ? (
         <p className="banner warning">
           Backend is unreachable. Reports will stay queued locally until connection is restored.
@@ -1652,8 +1745,8 @@ function App() {
       <nav className="floating-navbar" aria-label="Floating Action Navigation">
         <button
           type="button"
-          className="navbar-action-btn coordinate-btn"
-          onClick={handleCoordinate}
+          className={`navbar-action-btn coordinate-btn ${isCoordinationMode ? 'active-mode' : ''}`}
+          onClick={() => setIsCoordinationMode((prev) => !prev)}
         >
           <Users size={16} />
           <span>Coordinate</span>
