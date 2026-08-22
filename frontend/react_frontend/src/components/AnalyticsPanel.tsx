@@ -83,7 +83,7 @@ function getHeroImage(url?: string): string {
   return url
 }
 
-const SOURCE_COLORS = ['#1976d2', '#f59f00', '#78909c']
+const SOURCE_COLORS = ['#3b82f6', '#f59e0b', '#8b5cf6']
 
 export default function AnalyticsPanel({
   report,
@@ -225,8 +225,8 @@ export default function AnalyticsPanel({
     const onSite = contextReports.filter((r) => !r.isRemote).length
     const remote = contextReports.filter((r) => r.isRemote === true).length
     return [
-      { category: 'On-site', count: onSite, fill: '#1976d2' },
-      { category: 'Remote', count: remote, fill: '#f57c00' },
+      { category: 'On-site', count: onSite, fill: '#3b82f6' },
+      { category: 'Remote', count: remote, fill: '#8b5cf6' },
     ]
   }, [contextReports])
 
@@ -329,25 +329,26 @@ export default function AnalyticsPanel({
             <AreaChart data={growthTimelineData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
               <defs>
                 <linearGradient id="colorReports" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#1976d2" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="#1976d2" stopOpacity={0.0} />
+                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.5} />
+                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.0} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="name" stroke="#8c7d6b" fontSize={10} tickLine={false} />
-              <YAxis allowDecimals={false} stroke="#8c7d6b" fontSize={10} tickLine={false} />
+              <XAxis dataKey="name" stroke="#71717a" fontSize={10} tickLine={false} />
+              <YAxis allowDecimals={false} stroke="#71717a" fontSize={10} tickLine={false} />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: '#2c251d',
-                  border: 'none',
-                  borderRadius: '6px',
-                  color: '#ffffff',
+                  backgroundColor: 'rgba(18, 18, 24, 0.95)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  borderRadius: '8px',
+                  color: '#f5f5f7',
                   fontSize: '12px',
+                  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6)',
                 }}
               />
               <Area
                 type="monotone"
                 dataKey="reports"
-                stroke="#1976d2"
+                stroke="#3b82f6"
                 strokeWidth={2}
                 fillOpacity={1}
                 fill="url(#colorReports)"
@@ -366,15 +367,16 @@ export default function AnalyticsPanel({
         <div className="chart-container-wrapper">
           <ResponsiveContainer width="100%" height={160}>
             <BarChart data={locationComparisonData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-              <XAxis dataKey="category" stroke="#8c7d6b" fontSize={11} tickLine={false} />
-              <YAxis allowDecimals={false} stroke="#8c7d6b" fontSize={10} tickLine={false} />
+              <XAxis dataKey="category" stroke="#71717a" fontSize={11} tickLine={false} />
+              <YAxis allowDecimals={false} stroke="#71717a" fontSize={10} tickLine={false} />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: '#2c251d',
-                  border: 'none',
-                  borderRadius: '6px',
-                  color: '#ffffff',
+                  backgroundColor: 'rgba(18, 18, 24, 0.95)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  borderRadius: '8px',
+                  color: '#f5f5f7',
                   fontSize: '12px',
+                  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6)',
                 }}
               />
               <Bar dataKey="count" radius={[4, 4, 0, 0]}>
@@ -414,18 +416,19 @@ export default function AnalyticsPanel({
               </Pie>
               <Tooltip
                 contentStyle={{
-                  backgroundColor: '#2c251d',
-                  border: 'none',
-                  borderRadius: '6px',
-                  color: '#ffffff',
+                  backgroundColor: 'rgba(18, 18, 24, 0.95)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  borderRadius: '8px',
+                  color: '#f5f5f7',
                   fontSize: '12px',
+                  boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6)',
                 }}
               />
               <Legend
                 verticalAlign="bottom"
                 height={36}
                 formatter={(value) => (
-                  <span style={{ fontSize: '11px', color: '#4a3e2e' }}>{value}</span>
+                  <span style={{ fontSize: '11px', color: '#a1a1aa' }}>{value}</span>
                 )}
               />
             </PieChart>

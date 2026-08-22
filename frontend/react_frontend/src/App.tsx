@@ -12,10 +12,13 @@ import {
   AlertTriangle,
   PhoneCall,
   X,
+  ArrowLeftToLine,
+  ArrowRightToLine,
 } from 'lucide-react'
 import './App.css'
 import VerificationPanel from './components/recaptcha_cloudflare'
 import AnalyticsPanel from './components/AnalyticsPanel'
+import * as turf from '@turf/turf'
 
 function calculateDistanceKm(
   lat1: number,
@@ -34,6 +37,31 @@ function calculateDistanceKm(
       Math.sin(dLon / 2)
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
   return R * c
+}
+
+function generateSeverityZonesFeatureCollection(
+  reportsList: ReportRecord[],
+): GeoJSON.FeatureCollection {
+  const features = reportsList
+    .filter(
+      (r) =>
+        typeof r.location?.lng === 'number' &&
+        typeof r.location?.lat === 'number' &&
+        !isNaN(r.location.lng) &&
+        !isNaN(r.location.lat),
+    )
+    .map((r) => {
+      const circle = turf.circle([r.location.lng, r.location.lat], 0.5, {
+        units: 'kilometers',
+      })
+      circle.properties = {
+        id: r.id,
+        severity: r.compositeSeverity || 'LOW',
+      }
+      return circle
+    })
+
+  return turf.featureCollection(features)
 }
 
 type ReportStatus = 'pending' | 'synced'
@@ -330,15 +358,33 @@ function App() {
 
     const map = new mapboxgl.Map({
       container: mapContainerRef.current,
-      style: 'mapbox://styles/mapbox/streets-v12',
-      center: [0, 20],
-      zoom: 1.6,
+      style: 'mapbox://styles/mapbox/standard',
+      projection: 'globe',
+      zoom: 1.5,
+      center: [20, 10],
       attributionControl: true,
     })
 
     map.addControl(new mapboxgl.NavigationControl(), 'bottom-right')
 
     const init3DLayers = () => {
+      try {
+        map.setConfigProperty('basemap', 'lightPreset', 'dusk')
+      } catch (err) {
+        console.warn('Failed to set lightPreset to dusk:', err)
+      }
+
+      try {
+        map.setFog({
+          color: 'rgb(186, 210, 235)',
+          'high-color': 'rgba(36, 92, 223, 0.4)',
+          'space-color': 'rgb(11, 11, 25)',
+          'star-intensity': 0.35,
+        })
+      } catch (err) {
+        console.warn('Failed to configure atmosphere:', err)
+      }
+
       if (!map.getSource('mapbox-dem')) {
         map.addSource('mapbox-dem', {
           type: 'raster-dem',
@@ -390,6 +436,55 @@ function App() {
           },
           labelLayerId,
         )
+      }
+
+      // 3D Severity Radius Overlays
+      const featureCollectionData = generateSeverityZonesFeatureCollection(reportsRef.current)
+
+      if (!map.getSource('severity-zones')) {
+        map.addSource('severity-zones', {
+          type: 'geojson',
+          data: featureCollectionData,
+        })
+      }
+
+      if (!map.getLayer('severity-ground')) {
+        map.addLayer({
+          id: 'severity-ground',
+          type: 'fill',
+          source: 'severity-zones',
+          paint: {
+            'fill-color': [
+              'match',
+              ['get', 'severity'],
+              'HIGH', '#d63939',
+              'MEDIUM', '#f59f00',
+              'LOW', '#fcc419',
+              '#fcc419',
+            ],
+            'fill-opacity': 0.2,
+          },
+        })
+      }
+
+      if (!map.getLayer('severity-volume')) {
+        map.addLayer({
+          id: 'severity-volume',
+          type: 'fill-extrusion',
+          source: 'severity-zones',
+          paint: {
+            'fill-extrusion-color': [
+              'match',
+              ['get', 'severity'],
+              'HIGH', '#d63939',
+              'MEDIUM', '#f59f00',
+              'LOW', '#fcc419',
+              '#fcc419',
+            ],
+            'fill-extrusion-height': 150,
+            'fill-extrusion-opacity': 0.35,
+          },
+        })
       }
     }
 
@@ -510,6 +605,14 @@ function App() {
   }, [location])
 
   useEffect(() => {
+    if (!mapRef.current) return
+    const timer = setTimeout(() => {
+      mapRef.current?.resize()
+    }, 240)
+    return () => clearTimeout(timer)
+  }, [leftCollapsed, rightCollapsed])
+
+  useEffect(() => {
     if (!mapRef.current) {
       return
     }
@@ -549,6 +652,72 @@ function App() {
       markersRef.current.push(marker)
     }
   }, [reports, selectedReportId])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) {
+      return
+    }
+
+    const featureCollectionData = generateSeverityZonesFeatureCollection(reports)
+
+    const updateSourceAndLayers = () => {
+      if (map.getSource('severity-zones')) {
+        const source = map.getSource('severity-zones') as mapboxgl.GeoJSONSource
+        source.setData(featureCollectionData)
+      } else {
+        map.addSource('severity-zones', {
+          type: 'geojson',
+          data: featureCollectionData,
+        })
+
+        if (!map.getLayer('severity-ground')) {
+          map.addLayer({
+            id: 'severity-ground',
+            type: 'fill',
+            source: 'severity-zones',
+            paint: {
+              'fill-color': [
+                'match',
+                ['get', 'severity'],
+                'HIGH', '#d63939',
+                'MEDIUM', '#f59f00',
+                'LOW', '#fcc419',
+                '#fcc419',
+              ],
+              'fill-opacity': 0.2,
+            },
+          })
+        }
+
+        if (!map.getLayer('severity-volume')) {
+          map.addLayer({
+            id: 'severity-volume',
+            type: 'fill-extrusion',
+            source: 'severity-zones',
+            paint: {
+              'fill-extrusion-color': [
+                'match',
+                ['get', 'severity'],
+                'HIGH', '#d63939',
+                'MEDIUM', '#f59f00',
+                'LOW', '#fcc419',
+                '#fcc419',
+              ],
+              'fill-extrusion-height': 150,
+              'fill-extrusion-opacity': 0.35,
+            },
+          })
+        }
+      }
+    }
+
+    if (map.isStyleLoaded()) {
+      updateSourceAndLayers()
+    } else {
+      map.once('style.load', updateSourceAndLayers)
+    }
+  }, [reports])
 
   async function fetchRemoteReports() {
     if (!navigator.onLine) {
@@ -1019,7 +1188,7 @@ function App() {
 
       {/* 1. Location Capture Section at the very top */}
       <div className="location-prompt-box location-first-box">
-        <p className="location-prompt-title">Location Mode</p>
+        <p className="location-prompt-title">Enter location</p>
         <div className="location-prompt-buttons">
           <button
             type="button"
@@ -1086,7 +1255,7 @@ function App() {
       <input
         id="report-title"
         type="text"
-        placeholder="Bridge collapse near River Road"
+        placeholder="Disaster near DBCE"
         value={title}
         onChange={(event) => setTitle(event.target.value)}
       />
@@ -1164,7 +1333,7 @@ function App() {
       {/* Similar / Nearby Reports Recommendation & Moderation */}
       {similarReports.length > 0 ? (
         <div className="similar-reports-section">
-          <p className="similar-reports-heading">Nearby Existing Incidents</p>
+          <p className="similar-reports-heading">Similar reports</p>
           <div className="similar-reports-list">
             {similarReports.map((similar) => {
               const thumbUrl = similar.imageUrls?.[0] || similar.images?.[0]
@@ -1255,7 +1424,7 @@ function App() {
       ) : (
         <section className="nearby-feed-panel">
           <div className="nearby-feed-header">
-            <h2>Nearby Incidents</h2>
+            <h2>Nearby reports</h2>
             <span className="feed-count-pill">{nearbyRankedReports.length} within 15 km</span>
           </div>
 
@@ -1459,7 +1628,7 @@ function App() {
               title={leftCollapsed ? 'Expand report panel' : 'Collapse report panel'}
               onClick={() => setLeftCollapsed((current) => !current)}
             >
-              {leftCollapsed ? '>' : '<'}
+              {leftCollapsed ? <ArrowRightToLine size={18} /> : <ArrowLeftToLine size={18} />}
             </button>
             <div className="sidebar-content">{reportForm}</div>
           </aside>
@@ -1472,7 +1641,7 @@ function App() {
               title={rightCollapsed ? 'Expand analytics panel' : 'Collapse analytics panel'}
               onClick={() => setRightCollapsed((current) => !current)}
             >
-              {rightCollapsed ? '<' : '>'}
+              {rightCollapsed ? <ArrowLeftToLine size={18} /> : <ArrowRightToLine size={18} />}
             </button>
             <div className="sidebar-content">{rightSidebarContent}</div>
           </aside>

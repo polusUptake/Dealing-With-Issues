@@ -41,7 +41,7 @@ export default function VerificationPanel({
     <div className={`turnstile-wrapper ${isVerified ? "verified" : "pending"}`}>
       <div className="turnstile-header">
         <span className="turnstile-title">
-          {isVerified ? "✓ Security verification passed" : "Security Verification"}
+          {isVerified ? "Verification passed" : "Recaptcha verifying.."}
         </span>
       </div>
       <Turnstile
